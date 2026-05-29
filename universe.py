@@ -22,52 +22,41 @@ for t in tickers:
             print(f"Skipping {t}: insufficient history")
             continue
 
-        # Yesterday close
         yesterday_close = hist["Close"].iloc[-2]
 
-        # 10‑day metrics
         last_10 = hist.tail(10)
         avg_volume_10d = last_10["Volume"].mean()
         high_10d = last_10["High"].max()
         low_10d = last_10["Low"].min()
-
-        # ATR (10‑day)
         atr_10d = np.mean(last_10["High"] - last_10["Low"])
-
-        # Trend: number of green days in last 5
         trend_5d = sum(last_10["Close"].diff().tail(5) > 0)
 
         # ---------- 2. Fetch pre‑market data ----------
-        info = ticker.fast_info  # yfinance fast premarket fields
+        info = ticker.fast_info
 
         premarket_price = info.get("preMarketPrice", None)
         premarket_volume = info.get("preMarketVolume", None)
 
-        if premarket_price is None or premarket_volume is None:
-            print(f"Skipping {t}: no premarket data")
-            continue
+        # ---------- 3. Fallback logic ----------
+        if premarket_price is None:
+            premarket_price = yesterday_close  # fallback
+        if premarket_volume is None:
+            premarket_volume = 0  # fallback
 
-        # ---------- 3. Feature engineering ----------
-
-        # Gap %
+        # ---------- 4. Feature engineering ----------
         gap_pct = (premarket_price - yesterday_close) / yesterday_close
 
-        # Relative volume (session)
         rvol = hist["Volume"].iloc[-1] / avg_volume_10d
-
-        # Premarket RVOL (vs 10‑day avg session volume)
         premarket_rvol = premarket_volume / avg_volume_10d
 
-        # Breakout score (0 = bottom of range, 1 = top)
         if high_10d != low_10d:
             breakout_score = (yesterday_close - low_10d) / (high_10d - low_10d)
         else:
             breakout_score = 0
 
-        # Volatility score (ATR relative to price)
         volatility_score = atr_10d / yesterday_close
 
-        # ---------- 4. Final momentum score ----------
+        # ---------- 5. Final momentum score ----------
         score = (
             gap_pct * 3 +
             rvol * 2 +
@@ -95,13 +84,16 @@ for t in tickers:
         print(f"Error processing {t}: {e}")
         continue
 
-# Convert to DataFrame
+# ---------- 6. Handle empty DataFrame safely ----------
 df = pd.DataFrame(records)
 
-# Sort by score descending
-df = df.sort_values("score", ascending=False)
+if df.empty:
+    print("No valid tickers found. Saving empty file.")
+    df.to_csv("output/universe.csv", index=False)
+    exit()
 
-# Save output
+# ---------- 7. Sort and save ----------
+df = df.sort_values("score", ascending=False)
 df.to_csv("output/universe.csv", index=False)
 
 print("Advanced universe build complete.")
