@@ -76,3 +76,38 @@ st.subheader("📋 Full Universe (Sortable)")
 st.dataframe(df, use_container_width=True)
 
 st.success("Dashboard loaded successfully.")
+
+import pandas as pd
+import altair as alt
+
+tab1, tab2 = st.tabs(["Scanner", "Backtest"])
+
+with tab2:
+    st.header("📈 Backtest Results (Last 30 Days)")
+
+    try:
+        bt = pd.read_csv("output/backtest_results.csv")
+
+        st.subheader("Summary")
+        st.write(f"Total trades: {len(bt)}")
+        st.write(f"Win rate: {100 * bt['hit_target'].mean():.2f}%")
+        st.write(f"Average return: {100 * bt['return'].mean():.2f}%")
+
+        st.subheader("Equity Curve")
+        bt["equity"] = (1 + bt["return"]).cumprod()
+        chart = alt.Chart(bt).mark_line().encode(
+            x="date:T",
+            y="equity:Q"
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+        st.subheader("Distribution of Returns")
+        hist = alt.Chart(bt).mark_bar().encode(
+            x=alt.X("return:Q", bin=True),
+            y="count()"
+        )
+        st.altair_chart(hist, use_container_width=True)
+
+    except Exception as e:
+        st.warning("Backtest results not found. Run backtest.py first.")
+        st.error(str(e))
