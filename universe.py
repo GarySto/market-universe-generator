@@ -97,3 +97,55 @@ df = df.sort_values("score", ascending=False)
 df.to_csv("output/universe.csv", index=False)
 
 print("Advanced universe build complete.")
+
+def build_universe(target_date=None):
+    """
+    Build the universe for a specific date.
+    If target_date is None, use today's date.
+    """
+
+    import pandas as pd
+    import yfinance as yf
+    from datetime import datetime, timedelta
+
+    tickers = load_tickers()  # your existing function
+
+    rows = []
+
+    # If no date provided, use today
+    if target_date is None:
+        target_date = datetime.utcnow().date()
+
+    # yfinance needs a datetime, not a date
+    end_dt = datetime.combine(target_date, datetime.min.time())
+    start_dt = end_dt - timedelta(days=15)
+
+    for ticker in tickers:
+        try:
+            data = yf.download(
+                ticker,
+                start=start_dt,
+                end=end_dt,
+                interval="1d",
+                progress=False
+            )
+
+            if data.empty or len(data) < 12:
+                continue
+
+            # Your existing feature engineering logic goes here
+            # (yesterday_close, avg_volume_10d, high_10d, low_10d, atr_10d, etc.)
+            # Then compute score and append to rows
+
+            # Example placeholder:
+            rows.append({
+                "ticker": ticker,
+                "score": 0,  # replace with your real score
+                # ... all other fields ...
+            })
+
+        except Exception:
+            continue
+
+    df = pd.DataFrame(rows)
+    return df
