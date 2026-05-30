@@ -54,14 +54,10 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
 
     # Window from market open to 15 minutes after
     window = intraday[(intraday.index >= open_dt_utc) & (intraday.index <= exit_dt_utc)]
-
-    # SAFETY FIX: avoid ambiguous Series truth value
     if window is None or len(window) == 0:
         return None
 
-    # Extract high safely
     max_high = float(window["High"].astype(float).max())
-
     hit_target = max_high >= entry_price * 1.10
 
     if hit_target:
