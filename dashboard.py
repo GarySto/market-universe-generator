@@ -102,18 +102,20 @@ with tab2:
 
     st.info("Suggested entry time: **13:30 GMT** (1 hour before US market open)")
 
-    for _, row in today_top.iterrows():
-        st.subheader(f"{row['ticker']} — Score {row['score']:.2f}")
+    # --- Comparison Chart (MUCH more useful than per‑ticker bars) ---
+    st.subheader("📊 Score Comparison (Top 5)")
 
-        chart = (
-            alt.Chart(df[df["ticker"] == row["ticker"]])
-            .mark_bar()
-            .encode(
-                x="ticker",
-                y="score"
-            )
+    score_chart = (
+        alt.Chart(today_top)
+        .mark_bar()
+        .encode(
+            x=alt.X("ticker:N", sort="-y"),
+            y=alt.Y("score:Q"),
+            color=alt.Color("score", scale=alt.Scale(scheme="redyellowgreen")),
+            tooltip=["ticker", "score", "rvol", "trend_5d", "breakout_score"]
         )
+    )
 
-        st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(score_chart, use_container_width=True)
 
 st.success("Dashboard loaded successfully.")
