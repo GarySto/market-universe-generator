@@ -23,14 +23,16 @@ st.dataframe(top10, use_container_width=True)
 # --- Gap % vs RVOL Scatter ---
 st.subheader("🔥 Gap % vs Relative Volume (RVOL)")
 
+scatter_source = df.head(50)  # limit to top 50 for clarity
+
 scatter = (
-    alt.Chart(df)
-    .mark_circle(size=80)
+    alt.Chart(scatter_source)
+    .mark_circle(size=60)
     .encode(
         x=alt.X("gap_pct", title="Gap %"),
         y=alt.Y("rvol", title="Relative Volume (RVOL)"),
         color=alt.Color("score", scale=alt.Scale(scheme="redyellowgreen")),
-        tooltip=["ticker", "gap_pct", "rvol", "score"],
+        tooltip=["ticker", "score", "gap_pct", "rvol", "premarket_rvol", "trend_5d", "breakout_score"],
     )
     .interactive()
 )
