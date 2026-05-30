@@ -49,7 +49,7 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
     if entry_row["Open"].isna().all():
         return None
 
-    # Extract a single float safely (fixes the Series→float error)
+    # Extract a single float safely
     entry_price = float(entry_row["Open"].astype(float).values[0])
 
     # Window from market open to 15 minutes after
@@ -73,7 +73,6 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
         "return": ret,
         "hit_target": hit_target
     }
-
 
 # Main backtest loop
 def run_backtest():
