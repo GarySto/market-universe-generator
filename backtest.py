@@ -42,7 +42,7 @@ def get_intraday(ticker, date):
 def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
     # Find the first row at or after the entry timestamp
     entry_row = intraday[intraday.index >= entry_dt_utc].head(1)
-    if entry_row.empty:
+    if entry_row is None or len(entry_row) == 0:
         return None
 
     # Safety check: if Open is NaN or malformed
@@ -54,16 +54,20 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
 
     # Window from market open to 15 minutes after
     window = intraday[(intraday.index >= open_dt_utc) & (intraday.index <= exit_dt_utc)]
-    if window.empty:
+
+    # SAFETY FIX: avoid ambiguous Series truth value
+    if window is None or len(window) == 0:
         return None
 
-    max_high = float(window["High"].max())
+    # Extract high safely
+    max_high = float(window["High"].astype(float).max())
+
     hit_target = max_high >= entry_price * 1.10
 
     if hit_target:
         exit_price = entry_price * 1.10
     else:
-        exit_price = float(window["Close"].iloc[-1])
+        exit_price = float(window["Close"].astype(float).iloc[-1])
 
     ret = (exit_price - entry_price) / entry_price
 
