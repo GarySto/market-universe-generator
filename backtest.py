@@ -44,7 +44,9 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
     if entry_row.empty:
         return None
 
-    entry_price = float(entry_row["Open"].iloc[0])
+    if entry_row["Open"].isna().all():
+    return None
+    entry_price = float(entry_row["Open"].astype(float).values[0])
 
     window = intraday[(intraday.index >= open_dt_utc) & (intraday.index <= exit_dt_utc)]
     if window.empty:
