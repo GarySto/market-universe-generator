@@ -40,14 +40,19 @@ def get_intraday(ticker, date):
 
 # Simulate a single trade
 def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
+    # Find the first row at or after the entry timestamp
     entry_row = intraday[intraday.index >= entry_dt_utc].head(1)
     if entry_row.empty:
         return None
 
+    # Safety check: if Open is NaN or malformed
     if entry_row["Open"].isna().all():
-    return None
+        return None
+
+    # Extract a single float safely (fixes the Series→float error)
     entry_price = float(entry_row["Open"].astype(float).values[0])
 
+    # Window from market open to 15 minutes after
     window = intraday[(intraday.index >= open_dt_utc) & (intraday.index <= exit_dt_utc)]
     if window.empty:
         return None
@@ -68,6 +73,7 @@ def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
         "return": ret,
         "hit_target": hit_target
     }
+
 
 # Main backtest loop
 def run_backtest():
