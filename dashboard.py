@@ -111,3 +111,25 @@ with tab2:
     except Exception as e:
         st.warning("Backtest results not found. Run backtest.py first.")
         st.error(str(e))
+
+tab1, tab2, tab3 = st.tabs(["Scanner", "Backtest", "Trade Today"])
+
+with tab3:
+    st.header("🚀 Trade Today")
+
+    df = pd.read_csv("output/universe.csv")
+    today_top = df[df["score"] > 9].head(5)
+
+    st.subheader("Top 5 Candidates")
+    st.dataframe(today_top)
+
+    st.info("Suggested entry time: **13:30 GMT** (1 hour before US market open)")
+
+    for _, row in today_top.iterrows():
+        st.subheader(f"{row['ticker']} — Score {row['score']:.2f}")
+
+        chart = alt.Chart(df[df["ticker"] == row["ticker"]]).mark_bar().encode(
+            x="ticker",
+            y="score"
+        )
+        st.altair_chart(chart, use_container_width=True)
