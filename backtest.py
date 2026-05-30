@@ -18,7 +18,7 @@ def load_tickers():
 
 # Build universe for a given date (historical)
 def build_universe_for_date(target_date):
-    from universe import build_universe  # reuse your existing logic
+    from universe import build_universe
     df = build_universe(target_date=target_date)
     df = df.sort_values("score", ascending=False)
     return df
@@ -33,43 +33,52 @@ def get_intraday(ticker, date):
         auto_adjust=False,
         progress=False
     )
-    if data.empty:
+
+    if data is None or data.empty:
         return None
-    data = data.tz_localize("UTC") if data.index.tz is None else data
+
+    # Ensure timezone
+    if data.index.tz is None:
+        data = data.tz_localize("UTC")
+
     return data
 
 # Simulate a single trade
 def simulate_trade(intraday, entry_dt_utc, open_dt_utc, exit_dt_utc):
-    # Find the first row at or after the entry timestamp
-    entry_row = intraday[intraday.index >= entry_dt_utc]
 
-    if entry_row is None or len(entry_row) == 0:
+    # 1) ENTRY ROW
+    entry_rows = intraday[intraday.index >= entry_dt_utc]
+    if entry_rows is None or len(entry_rows) == 0:
         return None
 
-    # Extract the FIRST row only
-    entry_row = entry_row.iloc[0]
+    entry_row = entry_rows.iloc[0]
 
-    # Safety check: if Open is NaN or malformed
+    # Safety: Open must be a scalar float
     if pd.isna(entry_row["Open"]):
         return None
 
-    # Extract a single float safely
-    entry_price = float(entry_row["Open"])
+    try:
+        entry_price = float(entry_row["Open"])
+    except:
+        return None
 
-    # Window from market open to 15 minutes after
+    # 2) TRADING WINDOW
     window = intraday[(intraday.index >= open_dt_utc) & (intraday.index <= exit_dt_utc)]
-
     if window is None or len(window) == 0:
         return None
 
-    max_high = float(window["High"].astype(float).max())
-    hit_target = max_high >= entry_price * 1.10
+    # Safety: ensure numeric
+    try:
+        max_high = float(window["High"].astype(float).max())
+        last_close = float(window["Close"].astype(float).iloc[-1])
+    except:
+        return None
 
-    if hit_target:
-        exit_price = entry_price * 1.10
-    else:
-        exit_price = float(window["Close"].astype(float).iloc[-1])
+    # 3) TARGET LOGIC
+    target_price = entry_price * 1.10
+    hit_target = max_high >= target_price
 
+    exit_price = target_price if hit_target else last_close
     ret = (exit_price - entry_price) / entry_price
 
     return {
@@ -88,7 +97,6 @@ def run_backtest():
 
     for i in range(1, LOOKBACK_DAYS + 1):
         date = today - timedelta(days=i)
-
         print(f"Processing {date}...")
 
         # Build universe for that day
