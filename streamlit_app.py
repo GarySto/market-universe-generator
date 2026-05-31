@@ -93,33 +93,50 @@ def get_trading_days(n=14):
 @st.cache_data(ttl=3600, show_spinner=False)
 def score_one_day(target_date_str, tickers):
     """
-    Score tickers as-of a given historical date.
-    gap_pct is 0 because historical premarket prices aren't available via yfinance.
-    This means backtest scores are conservative — RVOL, trend and breakout drive the number.
+    Score tickers as-of a given historical date using a real gap proxy.
+
+    gap_pct is estimated as: (today's open - yesterday's close) / yesterday's close.
+    This is the best available historical substitute for premarket gap — it captures
+    stocks that actually opened significantly higher than where they closed the night before,
+    which is what the live strategy is hunting for.
+
+    This means the backtest now surfaces stocks that genuinely gapped on that day,
+    not just stocks with high RVOL which could be any large-cap on any ordinary day.
     """
     target_date = date.fromisoformat(target_date_str)
-    end_dt   = datetime.combine(target_date, datetime.min.time())
-    start_dt = end_dt - timedelta(days=20)
+    # We need today's data too (for the open price = gap proxy)
+    end_dt   = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+    start_dt = datetime.combine(target_date, datetime.min.time()) - timedelta(days=20)
 
     records = []
     for t in tickers:
         try:
             ticker = yf.Ticker(t)
             hist = ticker.history(start=start_dt, end=end_dt)
-            if hist.empty or len(hist) < 10:
+            if hist.empty or len(hist) < 11:
                 continue
 
-            yesterday_close = float(hist["Close"].iloc[-2])
-            last_10 = hist.tail(10)
+            # The target day's row is the last one (we fetched up to day+1)
+            today_row       = hist.iloc[-1]
+            yesterday_row   = hist.iloc[-2]
+
+            yesterday_close  = float(yesterday_row["Close"])
+            today_open       = float(today_row["Open"])
+            today_volume     = float(today_row["Volume"])
+
+            # Historical gap proxy: how much did it open vs prior close?
+            gap_pct = (today_open - yesterday_close) / yesterday_close if yesterday_close else 0
+
+            # Use last 10 days before target date for baseline metrics
+            hist_before = hist.iloc[:-1]  # everything except target day
+            last_10 = hist_before.tail(10)
             avg_volume_10d  = float(last_10["Volume"].mean())
             high_10d        = float(last_10["High"].max())
             low_10d         = float(last_10["Low"].min())
             atr_10d         = float((last_10["High"] - last_10["Low"]).mean())
-            trend_5d        = int((hist["Close"].diff() > 0).tail(5).sum())
-            yesterday_volume = float(hist["Volume"].iloc[-2])
-            gap_pct          = 0.0
-            rvol             = yesterday_volume / avg_volume_10d if avg_volume_10d else 0
-            premarket_rvol   = 0.0
+            trend_5d        = int((hist_before["Close"].diff() > 0).tail(5).sum())
+
+            rvol = today_volume / avg_volume_10d if avg_volume_10d else 0
 
             breakout_score = (
                 (yesterday_close - low_10d) / (high_10d - low_10d)
@@ -140,11 +157,12 @@ def score_one_day(target_date_str, tickers):
                 "score":           round(score, 4),
                 "gap_pct":         round(gap_pct, 4),
                 "rvol":            round(rvol, 4),
-                "premarket_rvol":  round(premarket_rvol, 4),
+                "premarket_rvol":  0.0,
                 "trend_5d":        trend_5d,
                 "breakout_score":  round(breakout_score, 4),
                 "volatility_score":round(volatility_score, 4),
                 "yesterday_close": round(yesterday_close, 2),
+                "today_open":      round(today_open, 2),
             })
         except Exception:
             continue
@@ -300,25 +318,52 @@ with tab1:
     ]]
     st.dataframe(top10, use_container_width=True)
 
-    st.subheader("🔥 Gap % vs Relative Volume (RVOL)")
-    st.caption(
-        "Each dot is one ticker. Stocks in the top-right corner are gapping up AND showing high volume — "
-        "the strongest combination for this strategy. Top-right = strongest. Bottom-left = weakest. "
-        "Colour represents overall score (green = higher, red = lower)."
-    )
-    scatter = (
-        alt.Chart(df.head(50))
-        .mark_circle(size=60)
-        .encode(
-            x=alt.X("gap_pct", title="Gap % (premarket price vs yesterday's close)"),
-            y=alt.Y("rvol", title="RVOL (volume vs 10-day average)"),
-            color=alt.Color("score", scale=alt.Scale(scheme="redyellowgreen"),
-                            legend=alt.Legend(title="Score")),
-            tooltip=["ticker", "score", "gap_pct", "rvol", "premarket_rvol", "trend_5d", "breakout_score"],
+    # Show gap chart if premarket data is populated; otherwise fall back to RVOL vs breakout
+    gap_values = df["gap_pct"].dropna()
+    has_gap_data = bool((gap_values.abs() > 0.001).any())
+
+    if has_gap_data:
+        st.subheader("🔥 Gap % vs Relative Volume (RVOL)")
+        st.caption(
+            "Each dot is one ticker. Top-right corner = gapping up AND high volume — "
+            "the strongest combination for this strategy. Colour = score (green higher, red lower)."
         )
-        .interactive()
-    )
-    st.altair_chart(scatter, use_container_width=True)
+        scatter = (
+            alt.Chart(df[df["gap_pct"].abs() > 0.001].head(50))
+            .mark_circle(size=80)
+            .encode(
+                x=alt.X("gap_pct:Q", title="Gap % (premarket vs yesterday's close)",
+                         axis=alt.Axis(format=".1%")),
+                y=alt.Y("rvol:Q", title="RVOL (volume vs 10-day average)"),
+                color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
+                                legend=alt.Legend(title="Score")),
+                tooltip=["ticker", "score", "gap_pct", "rvol", "premarket_rvol", "trend_5d", "breakout_score"],
+            )
+            .interactive()
+        )
+        st.altair_chart(scatter, use_container_width=True)
+    else:
+        st.subheader("📊 RVOL vs Breakout Score")
+        st.info(
+            "**Gap % data isn't available yet** — it populates when the 13:00 BST scan runs during premarket hours. "
+            "Until then this chart shows RVOL vs Breakout Score, which are always populated and "
+            "still useful for spotting relative strength. Top-right = high volume AND near the top of recent price range."
+        )
+        scatter = (
+            alt.Chart(df.head(50))
+            .mark_circle(size=80)
+            .encode(
+                x=alt.X("breakout_score:Q",
+                         title="Breakout score (0 = bottom of recent range, 1 = top)",
+                         scale=alt.Scale(domain=[0, 1])),
+                y=alt.Y("rvol:Q", title="RVOL (volume vs 10-day average)"),
+                color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
+                                legend=alt.Legend(title="Score")),
+                tooltip=["ticker", "score", "breakout_score", "rvol", "trend_5d", "volatility_score"],
+            )
+            .interactive()
+        )
+        st.altair_chart(scatter, use_container_width=True)
 
     st.subheader("📊 Trend Strength (Last 5 Days)")
     st.caption(
@@ -628,8 +673,14 @@ for the most reliable candle charts.
 
         top5 = day_df.head(5)
         st.dataframe(
-            top5[["ticker", "score", "rvol", "trend_5d", "breakout_score", "volatility_score", "yesterday_close"]],
+            top5[["ticker", "score", "gap_pct", "rvol", "trend_5d", "breakout_score", "volatility_score", "yesterday_close"]],
             use_container_width=True
+        )
+        st.caption(
+            "**gap_pct here** is (today's open − yesterday's close) / yesterday's close — "
+            "the best available historical proxy for a premarket gap. "
+            "A value of 0.08 means the stock opened 8% higher than the previous close, "
+            "which is the kind of signal the live scanner looks for."
         )
 
         score_bar = (
@@ -637,21 +688,29 @@ for the most reliable candle charts.
             .mark_bar()
             .encode(
                 x=alt.X("ticker:N", sort="-y", title="Ticker"),
-                y=alt.Y("score:Q", title="Backtest score (gap_pct = 0)"),
-                color=alt.Color("score", scale=alt.Scale(scheme="redyellowgreen"),
+                y=alt.Y("score:Q", title="Backtest score"),
+                color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
                                 legend=alt.Legend(title="Score")),
-                tooltip=["ticker", "score", "rvol", "trend_5d", "breakout_score"]
+                tooltip=["ticker", "score", "gap_pct", "rvol", "trend_5d", "breakout_score"]
             )
         )
         st.altair_chart(score_bar, use_container_width=True)
 
         above_9 = day_df[day_df["score"] > 9]
         if above_9.empty:
-            st.warning(
-                "No tickers scored above 9 on this day in the backtest. "
-                "Bear in mind this threshold was calibrated for live trading where gap_pct contributes — "
-                "in the backtest, a score of 7+ with strong RVOL and breakout is still worth reviewing."
-            )
+            # Show ones that at least had a meaningful opening gap
+            gappers = day_df[day_df["gap_pct"] > 0.03]
+            if not gappers.empty:
+                st.warning(
+                    f"No tickers scored above 9, but {len(gappers)} had a meaningful opening gap (>3%): "
+                    f"{', '.join(gappers.head(5)['ticker'].tolist())}. "
+                    "These would have been worth investigating in premarket even if the overall score was below threshold."
+                )
+            else:
+                st.warning(
+                    "No tickers scored above 9 on this day, and no meaningful opening gaps were detected. "
+                    "The strategy would have sat this day out — which is the correct call."
+                )
         else:
             st.success(
                 f"{len(above_9)} ticker(s) scored above 9: {', '.join(above_9['ticker'].tolist())}. "
