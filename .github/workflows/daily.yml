@@ -2,7 +2,7 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "30 13 * * *"
+    - cron: "0 12 * * 1-5"
   workflow_dispatch:
 
 jobs:
