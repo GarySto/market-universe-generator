@@ -1,5 +1,5 @@
-streamlit==1.58.0
-pandas==2.2.1
-altair==5.2.0
-yfinance==0.2.37
-numpy==1.26.4
+streamlit
+pandas
+altair
+yfinance
+numpy
