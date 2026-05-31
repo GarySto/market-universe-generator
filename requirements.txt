@@ -3,3 +3,4 @@ pandas
 altair
 yfinance
 numpy
+pytz
