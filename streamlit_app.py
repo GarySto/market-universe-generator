@@ -138,7 +138,8 @@ def score_one_day(target_date_str, tickers):
 def fetch_intraday(ticker_str, trade_date_str):
     """
     Fetch 1-minute candle data for a ticker on a specific date.
-    Returns a dataframe with Open, High, Low, Close, Volume columns.
+    Trims to regular market hours only (09:30–10:00 ET = 13:30–14:00 UTC).
+    Returns a dataframe indexed from minute 0 = market open.
     """
     trade_date = date.fromisoformat(trade_date_str)
     start = datetime.combine(trade_date, datetime.min.time())
@@ -159,12 +160,28 @@ def fetch_intraday(ticker_str, trade_date_str):
         df = df.rename(columns={"Datetime": "datetime", "Open": "open",
                                  "High": "high", "Low": "low",
                                  "Close": "close", "Volume": "volume"})
-        # Keep only regular hours: 14:30–15:00 BST (09:30–10:00 ET)
+
+        # Ensure UTC-aware datetimes
         df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
-        market_open  = df["datetime"].iloc[0]  # first candle = market open
-        market_close = market_open + timedelta(minutes=30)
-        df = df[(df["datetime"] >= market_open) & (df["datetime"] <= market_close)]
+
+        # US market opens at 09:30 ET = 13:30 UTC
+        # Find the first candle at or after 09:30 ET on the trade date
+        import pytz
+        et = pytz.timezone("America/New_York")
+        market_open_et = et.localize(
+            datetime(trade_date.year, trade_date.month, trade_date.day, 9, 30, 0)
+        ).astimezone(pytz.utc).replace(tzinfo=None)
+        market_open_utc = pd.Timestamp(market_open_et, tz="UTC")
+        market_close_utc = market_open_utc + timedelta(minutes=30)
+
+        df = df[(df["datetime"] >= market_open_utc) & (df["datetime"] < market_close_utc)]
+
+        if df.empty:
+            return pd.DataFrame()
+
         df = df.reset_index(drop=True)
+        # Minute 0 = market open (09:30 ET)
+        df["minute"] = range(len(df))
         return df
     except Exception:
         return pd.DataFrame()
@@ -524,23 +541,32 @@ with tab3:
                     st.warning("Not enough candle data to simulate the trade.")
 
                 # ---- Candle chart ----
-                candles["minute"] = range(len(candles))
                 candles["colour"] = candles.apply(
                     lambda r: "up" if r["close"] >= r["open"] else "down", axis=1
                 )
 
+                price_scale = alt.Scale(zero=False)
+
                 # Candle bodies
                 bodies = (
                     alt.Chart(candles)
-                    .mark_bar(width=8)
+                    .mark_bar(width=10)
                     .encode(
-                        x=alt.X("minute:Q", title="Minutes from open"),
-                        y=alt.Y("open:Q", title="Price ($)", scale=alt.Scale(zero=False)),
+                        x=alt.X("minute:Q", title="Minutes after market open (09:30 ET / 14:30 BST)",
+                                axis=alt.Axis(tickMinStep=1)),
+                        y=alt.Y("open:Q", title="Price ($)", scale=price_scale),
                         y2="close:Q",
                         color=alt.Color("colour:N",
                             scale=alt.Scale(domain=["up", "down"], range=["#26a69a", "#ef5350"]),
                             legend=None),
-                        tooltip=["minute", "open", "high", "low", "close", "volume"]
+                        tooltip=[
+                            alt.Tooltip("minute:Q", title="Minute"),
+                            alt.Tooltip("open:Q",   title="Open",   format=".2f"),
+                            alt.Tooltip("high:Q",   title="High",   format=".2f"),
+                            alt.Tooltip("low:Q",    title="Low",    format=".2f"),
+                            alt.Tooltip("close:Q",  title="Close",  format=".2f"),
+                            alt.Tooltip("volume:Q", title="Volume"),
+                        ]
                     )
                 )
 
@@ -550,7 +576,7 @@ with tab3:
                     .mark_rule(strokeWidth=1)
                     .encode(
                         x="minute:Q",
-                        y="low:Q",
+                        y=alt.Y("low:Q",  scale=price_scale),
                         y2="high:Q",
                         color=alt.Color("colour:N",
                             scale=alt.Scale(domain=["up", "down"], range=["#26a69a", "#ef5350"]),
@@ -558,43 +584,75 @@ with tab3:
                     )
                 )
 
-                # Target line
-                target_line = (
-                    alt.Chart(pd.DataFrame({"y": [result["target_price"]]}))
-                    .mark_rule(color="#ffb300", strokeDash=[4, 4], strokeWidth=1.5)
-                    .encode(y="y:Q")
+                # Entry price line (solid white/grey — where you buy)
+                entry_line = (
+                    alt.Chart(pd.DataFrame({"y": [entry_price], "label": [f"Entry ${entry_price:.2f}"]}))
+                    .mark_rule(color="#aaaaaa", strokeWidth=1.5)
+                    .encode(y=alt.Y("y:Q", scale=price_scale))
                 )
 
-                # 15-minute exit marker
+                # +10% target line (amber dashed)
+                target_line = (
+                    alt.Chart(pd.DataFrame({"y": [result["target_price"]], "label": [f"+10% target ${result['target_price']:.2f}"]}))
+                    .mark_rule(color="#ffb300", strokeDash=[5, 3], strokeWidth=2)
+                    .encode(y=alt.Y("y:Q", scale=price_scale))
+                )
+
+                # 15-minute exit vertical line (grey dashed)
                 exit_rule = (
                     alt.Chart(pd.DataFrame({"x": [15]}))
-                    .mark_rule(color="#888888", strokeDash=[4, 4], strokeWidth=1)
+                    .mark_rule(color="#666666", strokeDash=[4, 4], strokeWidth=1.5)
                     .encode(x="x:Q")
                 )
 
-                chart = (bodies + wicks + target_line + exit_rule).properties(
-                    height=350,
-                    title=f"{ticker_choice} — {formatted_date} — 1-min candles (first 30 minutes)"
+                # Exit point marker — big dot at the actual exit candle
+                if result["exit_minute"] is not None and result["exit_price"] is not None:
+                    exit_dot_data = pd.DataFrame({
+                        "minute": [result["exit_minute"]],
+                        "price":  [result["exit_price"]],
+                    })
+                    exit_dot_colour = "#ffb300" if result["hit_target"] else "#ff4444"
+                    exit_dot = (
+                        alt.Chart(exit_dot_data)
+                        .mark_point(size=150, shape="diamond", filled=True, color=exit_dot_colour)
+                        .encode(
+                            x="minute:Q",
+                            y=alt.Y("price:Q", scale=price_scale),
+                            tooltip=[
+                                alt.Tooltip("minute:Q", title="Exit minute"),
+                                alt.Tooltip("price:Q",  title="Exit price", format=".2f"),
+                            ]
+                        )
+                    )
+                    chart = (bodies + wicks + entry_line + target_line + exit_rule + exit_dot)
+                else:
+                    chart = (bodies + wicks + entry_line + target_line + exit_rule)
+
+                chart = chart.properties(
+                    height=380,
+                    title=f"{ticker_choice} — {formatted_date} — 1-min candles (market open to 30 mins)"
                 )
                 st.altair_chart(chart, use_container_width=True)
 
                 st.caption(
-                    "Yellow dashed line = +10% target price. "
-                    "Grey dashed line = 15-minute exit point. "
-                    "Green candles = closed up. Red = closed down."
+                    f"Grey solid line = entry price (${entry_price:.2f}, open of first candle at 09:30 ET).  "
+                    f"Amber dashed line = +10% target (${result['target_price']:.2f}).  "
+                    f"Grey dashed vertical = 15-minute forced exit.  "
+                    f"Diamond marker = actual exit point.  "
+                    f"Green candles = closed up. Red = closed down."
                 )
 
                 # Volume bar chart below
                 vol_chart = (
                     alt.Chart(candles)
-                    .mark_bar(width=8)
+                    .mark_bar(width=10)
                     .encode(
-                        x=alt.X("minute:Q", title="Minutes from open"),
+                        x=alt.X("minute:Q", title="Minutes after open"),
                         y=alt.Y("volume:Q", title="Volume"),
                         color=alt.Color("colour:N",
                             scale=alt.Scale(domain=["up", "down"], range=["#26a69a", "#ef5350"]),
                             legend=None),
                     )
-                    .properties(height=100, title="Volume")
+                    .properties(height=100, title="Volume by minute")
                 )
                 st.altair_chart(vol_chart, use_container_width=True)
