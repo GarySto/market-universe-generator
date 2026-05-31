@@ -726,8 +726,10 @@ for the most reliable candle charts.
                     else:
                         st.warning("Not enough candle data to simulate the trade fully.")
 
-                    # Premarket candle count
-                    premarket_count = len(candles[candles["phase"] == "premarket"])
+                    # Premarket candle count + momentum assessment
+                    premarket_candles = candles[candles["phase"] == "premarket"]
+                    premarket_count = len(premarket_candles)
+
                     if premarket_count == 0:
                         st.warning(
                             "⚠️ **No premarket candle data available for this ticker on this date.** "
@@ -735,13 +737,59 @@ for the most reliable candle charts.
                             "This is a data availability issue — yfinance premarket coverage is inconsistent. "
                             "Large-cap stocks like AAPL, NVDA and MSFT tend to have it; "
                             "smaller names often don't. The win/loss result above is still valid "
-                            "based on what happened during regular hours."
+                            "based on what happened during regular hours. "
+                            "**Without premarket data you can't assess the run-up, which means you "
+                            "wouldn't have had the information needed to decide whether to buy this "
+                            "stock in the first place. The strategy depends on seeing the momentum build.**"
                         )
                     else:
                         st.caption(
                             f"Showing {premarket_count} premarket candles (12:00–14:29 BST) "
                             f"plus regular hours to 15:00 BST."
                         )
+
+                        # Assess whether there was a meaningful premarket run-up
+                        # Compare price at start of premarket window vs price at entry (13:30)
+                        pm_open  = float(premarket_candles["open"].iloc[0])
+                        pm_entry = entry_price  # open at 13:30
+
+                        # Also look at the trend within premarket — were closes generally rising?
+                        pm_closes = premarket_candles["close"].values
+                        rising_candles = sum(1 for i in range(1, len(pm_closes)) if pm_closes[i] > pm_closes[i-1])
+                        pm_run_pct = (pm_entry - pm_open) / pm_open if pm_open > 0 else 0
+                        pm_trend_pct = rising_candles / max(len(pm_closes) - 1, 1)
+
+                        # Flag: Hub Cyber pattern = clear upward run into entry
+                        if pm_run_pct >= 0.05 and pm_trend_pct >= 0.55:
+                            st.success(
+                                f"📈 **Strong premarket run detected** — price moved "
+                                f"+{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST, "
+                                f"with {rising_candles} of {len(pm_closes)-1} premarket candles closing up. "
+                                f"This is the kind of pattern the strategy is looking for — "
+                                f"visible momentum building before the market opens."
+                            )
+                        elif pm_run_pct >= 0.02 and pm_trend_pct >= 0.5:
+                            st.warning(
+                                f"📊 **Moderate premarket movement** — price moved "
+                                f"+{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"Some momentum present but not a strong conviction run. "
+                                f"In live trading you'd want to see a clearer directional move before buying."
+                            )
+                        elif pm_run_pct <= -0.02:
+                            st.error(
+                                f"📉 **Premarket was falling** — price dropped "
+                                f"{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"This is the opposite of what the strategy looks for. "
+                                f"In live trading, you would not have bought this stock."
+                            )
+                        else:
+                            st.info(
+                                f"➡️ **Flat premarket** — price moved only "
+                                f"{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"No clear directional momentum. In live trading, a flat or "
+                                f"drifting premarket with no gap would typically mean this stock "
+                                f"wouldn't appear in your top candidates at all."
+                            )
 
                     # Build chart
                     candles["colour"] = candles.apply(
