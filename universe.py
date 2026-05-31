@@ -42,13 +42,13 @@ def build_universe(target_date=None):
             atr_10d        = float((last_10["High"] - last_10["Low"]).mean())
             trend_5d       = int((hist["Close"].diff() > 0).tail(5).sum())
 
-            # ── 2. Minimum quality filters ──────────────────────────────────
-            # Skip penny stocks and very illiquid names — fills are unreliable
-            if yesterday_close < 2.0:
-                print(f"Skipping {t}: price ${yesterday_close:.2f} below $2 minimum")
-                continue
-            if avg_volume_10d < 500_000:
-                print(f"Skipping {t}: avg volume {avg_volume_10d:,.0f} below 500k minimum")
+            # ── 2. Minimum price filter ─────────────────────────────────────
+            # Penny stocks (under $1) have wide bid-ask spreads in premarket
+            # that can cost 5-10% before you've even entered the trade.
+            # This isn't about volume — high RVOL on a cheap stock is still
+            # a valid signal, the spread just makes it untradeble in practice.
+            if yesterday_close < 1.0:
+                print(f"Skipping {t}: price ${yesterday_close:.2f} below $1 minimum")
                 continue
 
             # ── 3. Premarket data ───────────────────────────────────────────
