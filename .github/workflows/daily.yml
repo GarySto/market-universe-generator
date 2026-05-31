@@ -10,26 +10,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.10"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: pip install yfinance pandas
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy
 
-    - name: Run universe builder
-      run: python universe.py
+      - name: Run universe builder
+        run: python universe.py
 
-    - name: Commit results
-      run: |
-        git config user.name "github-actions"
-        git config user.email "github-actions@github.com"
-        git add output/universe.csv
-        git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily universe update"
-        git push
+      - name: Send alert email (if strong candidates found)
+        env:
+          OUTLOOK_USER:     ${{ secrets.OUTLOOK_USER }}
+          OUTLOOK_PASSWORD: ${{ secrets.OUTLOOK_PASSWORD }}
+          ALERT_EMAILS:     ${{ secrets.ALERT_EMAILS }}
+        run: python send_alert.py
 
-
+      - name: Commit results
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add output/universe.csv
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily universe update"
+          git push
