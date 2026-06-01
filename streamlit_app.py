@@ -993,20 +993,37 @@ with tab4:
     try:
         trades = pd.read_csv("trades.csv")
         trades.columns = [c.strip() for c in trades.columns]
+        trades = trades.dropna(how="all")
 
-        # Ensure numeric columns are numeric
-        for col in ["entry_price", "exit_price", "shares", "return_pct", "running_bank", "score", "gap_pct"]:
-            if col in trades.columns:
-                trades[col] = pd.to_numeric(trades[col], errors="coerce")
-
-        trades["return_gbp"] = (trades["exit_price"] - trades["entry_price"]) * trades["shares"]
-        trades["win_loss"] = trades["return_pct"].apply(
-            lambda x: "Win" if x >= 10 else ("Partial" if x > 0 else "Loss") if pd.notna(x) else ""
+        # Only proceed if there are actual data rows with a ticker
+        has_trades = (
+            len(trades) > 0 and
+            "ticker" in trades.columns and
+            trades["ticker"].notna().any() and
+            trades["ticker"].astype(str).str.strip().ne("").any()
         )
 
-        has_trades = len(trades) > 0
+        if has_trades:
+            for col in ["entry_price", "exit_price", "shares", "running_bank", "score", "gap_pct", "rvol"]:
+                if col in trades.columns:
+                    trades[col] = pd.to_numeric(trades[col], errors="coerce")
+
+            trades["return_gbp"] = (
+                (trades["exit_price"] - trades["entry_price"]) * trades["shares"]
+            ).round(2)
+            trades["return_pct"] = (
+                (trades["exit_price"] - trades["entry_price"]) / trades["entry_price"] * 100
+            ).round(2)
+            trades["win_loss"] = trades["return_pct"].apply(
+                lambda x: "Win" if pd.notna(x) and x >= 10
+                else ("Partial" if pd.notna(x) and x > 0
+                else ("Loss" if pd.notna(x) else ""))
+            )
 
     except FileNotFoundError:
+        has_trades = False
+        trades = pd.DataFrame()
+    except Exception:
         has_trades = False
         trades = pd.DataFrame()
 
