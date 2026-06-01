@@ -1,6 +1,5 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import os
 from datetime import datetime, timedelta
 
@@ -9,7 +8,7 @@ os.makedirs("output", exist_ok=True)
 
 def load_tickers():
     with open("tickers.txt", "r") as f:
-        return [t.strip() for t in f.readlines() if t.strip() and t.strip() != "Ticker"]
+        return [t.strip() for t in f if t.strip() and t.strip() != "Ticker"]
 
 
 def build_universe(target_date=None):
@@ -26,7 +25,7 @@ def build_universe(target_date=None):
         try:
             ticker = yf.Ticker(t)
 
-            # ── 1. Historical data ──────────────────────────────────────────
+            # ── Historical daily data ────────────────────────────────────────
             hist = ticker.history(start=start_dt, end=end_dt)
             if hist.empty or len(hist) < 10:
                 print(f"Skipping {t}: insufficient history")
@@ -35,6 +34,11 @@ def build_universe(target_date=None):
             yesterday_close  = float(hist["Close"].iloc[-1])
             yesterday_volume = float(hist["Volume"].iloc[-1])
 
+            # Minimum price filter — penny stocks have wide spreads in premarket
+            if yesterday_close < 1.0:
+                print(f"Skipping {t}: price ${yesterday_close:.2f} below $1 minimum")
+                continue
+
             last_10        = hist.tail(10)
             avg_volume_10d = float(last_10["Volume"].mean())
             high_10d       = float(last_10["High"].max())
@@ -42,26 +46,26 @@ def build_universe(target_date=None):
             atr_10d        = float((last_10["High"] - last_10["Low"]).mean())
             trend_5d       = int((hist["Close"].diff() > 0).tail(5).sum())
 
-            # ── 2. Minimum price filter ─────────────────────────────────────
-            # Penny stocks (under $1) have wide bid-ask spreads in premarket
-            # that can cost 5-10% before you've even entered the trade.
-            # This isn't about volume — high RVOL on a cheap stock is still
-            # a valid signal, the spread just makes it untradeble in practice.
-            if yesterday_close < 1.0:
-                print(f"Skipping {t}: price ${yesterday_close:.2f} below $1 minimum")
-                continue
+            # ── Premarket data via .info dict ────────────────────────────────
+            # fast_info does NOT expose premarket price in current yfinance.
+            # .info is slower but contains preMarketPrice and preMarketVolume.
+            # These only populate during active premarket hours (09:00-09:30 ET
+            # = 14:00-14:30 BST). Outside those hours they return None.
+            premarket_price  = None
+            premarket_volume = 0
 
-            # ── 3. Premarket data ───────────────────────────────────────────
-            # Use getattr (not .get) — fast_info is an object, not a dict
-            info = ticker.fast_info
+            try:
+                info = ticker.info
+                premarket_price  = info.get("preMarketPrice")
+                premarket_volume = info.get("preMarketVolume") or 0
+            except Exception:
+                pass
 
-            premarket_price = getattr(info, "pre_market_price", None)
+            # Fallback: if no premarket price, use yesterday's close (gap = 0)
             if not premarket_price or premarket_price <= 0:
-                premarket_price = yesterday_close  # fallback: no gap
+                premarket_price = yesterday_close
 
-            premarket_volume = getattr(info, "pre_market_volume", None) or 0
-
-            # ── 4. Feature engineering ──────────────────────────────────────
+            # ── Feature engineering ──────────────────────────────────────────
             gap_pct        = (premarket_price - yesterday_close) / yesterday_close
             rvol           = yesterday_volume / avg_volume_10d if avg_volume_10d else 0
             premarket_rvol = premarket_volume / avg_volume_10d if avg_volume_10d else 0
@@ -72,8 +76,11 @@ def build_universe(target_date=None):
             )
             volatility_score = atr_10d / yesterday_close if yesterday_close else 0
 
-            # ── 5. Momentum score ───────────────────────────────────────────
-            # Weights: gap (3x) > rvol/breakout (2x each) > volatility (1x) > trend (0.5x)
+            # ── Momentum score ───────────────────────────────────────────────
+            # gap_pct (3x) is the dominant signal — a real premarket gap with
+            # volume is the strongest indicator for this strategy.
+            # Without a gap, maximum score from remaining signals is ~10-11,
+            # which means stocks with no premarket story stay below threshold.
             score = (
                 3   * gap_pct
                 + 2 * rvol
@@ -118,7 +125,8 @@ if __name__ == "__main__":
         top5 = df[df["score"] > 9].head(5)
         if not top5.empty:
             print(f"\nTop candidates (score > 9):")
-            print(top5[["ticker", "score", "gap_pct", "rvol", "breakout_score"]].to_string(index=False))
+            print(top5[["ticker", "score", "gap_pct", "rvol",
+                         "premarket_price", "breakout_score"]].to_string(index=False))
         else:
             print("\nNo tickers above score 9 today")
     else:
