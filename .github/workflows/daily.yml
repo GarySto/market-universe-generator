@@ -2,7 +2,9 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — morning scan
+    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — re-score + alert check
+    - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final check before open
   workflow_dispatch:
 
 jobs:
