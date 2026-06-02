@@ -28,11 +28,26 @@ Each ticker gets scored across five dimensions:
 
 **Volatility score** — ATR-based. Higher volatility means more room to move, but also more risk. It's in the score because a stock that never moves isn't useful to this strategy even if everything else looks good.
 
-The final momentum score weights these together:
+There is also a sixth composite signal:
+
+**Premarket momentum** — a combination of gap % and premarket RVOL, both normalised, that captures stocks where price and volume are building together before the open. This is the highest-weighted signal.
+
+Before scoring, all signals are min-max normalised to a 0–1 scale across the full universe of tickers scanned that day. This matters: it means the weights actually control relative importance, rather than being dominated by whichever signal happens to have the largest raw numbers. Previously, RVOL (an unbounded ratio) was swamping gap % (a small fraction) despite the weights suggesting otherwise.
+
+The final score:
 
 ```
-score = 3 × gap_pct + 2 × rvol + 0.5 × trend_5d + 2 × breakout_score + 1 × volatility_score
+score = 5 × premarket_momentum  (normalised gap + premarket RVOL)
+      + 3 × norm_gap            (gap % normalised)
+      + 2 × norm_breakout       (breakout score normalised)
+      + 1 × norm_rvol           (RVOL normalised)
+      + 1 × norm_trend          (trend_5d / 5)
+      + 0.5 × norm_volatility   (volatility score normalised)
 ```
+
+Maximum possible score: ~12.5. The dashboard flags tickers above 7 as worth investigating.
+
+Long-only rules are enforced at the scoring stage: any ticker with a negative premarket gap receives a score of 0 and is excluded from Trade Today entirely. This prevents high-RVOL down-gappers from appearing as false positives.
 
 The top of the list each morning is where I start looking. Whether I actually trade any of them is still a human decision — this tool narrows the field, it doesn't make the call for me.
 
@@ -79,15 +94,21 @@ This generates a fresh `output/universe.csv` based on current data. Useful if yo
 
 ## Reading the dashboard
 
-The dashboard has two tabs: Scanner and Trade Today.
+The dashboard has four tabs: Scanner, Trade Today, Backtest, and My Trades.
 
 **Top 10 Momentum Tickers** — sorted by score descending. These are the first names worth looking at each morning.
 
 **Gap % vs RVOL scatter** — top-right of this chart is where you want to be. High gap and high relative volume together is a much stronger signal than either on its own.
 
-**Breakout score chart** — tickers near 1.0 are trading near the top of their recent range, which can mean momentum continuation or exhaustion depending on the broader context. Context I am still learning to read properly, if I'm honest.
+**Breakout score chart** — tickers near 1.0 are trading near the top of their recent range, which can mean momentum continuation or exhaustion depending on the broader context.
 
 **Full universe table** — sortable. Useful if you want to filter or look beyond the top 10.
+
+**Trade Today tab** — filters the morning scan to tickers scoring above 7 with a real positive premarket gap. Also includes a pre-trade confirmation check (run around 14:00–14:15 BST) that refetches live premarket data and gives a 🟢🟡🔴 traffic light for each candidate.
+
+**Backtest tab** — re-scores each of the last 14 trading days using only data that would have been available at the time. Uses the same normalised scoring as the live scanner. Pick a day and a ticker to see the 1-minute candle chart and simulate the +10% / 14:45 BST exit strategy.
+
+**My Trades tab** — tracks every real trade made using the scanner. Reads from `trades.csv` in the repo. Shows running bank, win rate, return distribution, and a scatter of score vs actual return.
 
 One thing worth knowing: the `gap_pct` and `premarket_rvol` columns will show as zero outside of premarket hours. The Action runs at 13:00 BST specifically to catch live premarket data, so if you're looking at the dashboard at 9pm, those numbers won't mean much.
 
@@ -98,7 +119,7 @@ One thing worth knowing: the `gap_pct` and `premarket_rvol` columns will show as
 The current approach:
 
 - Review the top candidates on the dashboard around 13:15–13:30 BST
-- Look for tickers with gap_pct above ~0.05, rvol above 2, trend_5d of 4 or 5, and a strong breakout score
+- Look for tickers with a score above 7, gap_pct above ~0.05, premarket_rvol building, trend_5d of 4 or 5, and a strong breakout score
 - Buy in premarket or at market open (14:30 BST)
 - Target: +10% from entry
 - Exit: take the profit, or cut at 15 minutes after open if target hasn't been hit
@@ -111,9 +132,11 @@ Slippage and fees aren't yet modelled in the backtest. That's on the list.
 
 ## What's coming
 
-The backtesting module exists in skeleton form but threw a pandas error that I shelved for now. When I come back to it, the plan is to simulate the strategy historically — picking the top 5 tickers each day, entering at premarket price, exiting at +10% or after 15 minutes — and look at win rate, average return, and equity curve.
+The backtesting module is live and working — it re-scores the last 14 trading days with the same normalised formula as the live scanner, and shows 1-minute candle replays with the simulated +10% / 14:45 BST trade. Slippage and fees aren't yet modelled. That's on the list.
 
-After that: alerts (probably via email or Discord), better premarket data if yfinance proves unreliable for that specifically, and possibly some form of semi-automated execution if I ever get confident enough in the signal.
+The My Trades tab is also live and tracks real trades against the scanner's morning scores — the scatter of score vs actual return will be the key chart for validating (or challenging) the model over time.
+
+Next priorities: alerts (probably email), expanding the trade log to capture enough data to run proper weight optimisation, and possibly adding float and catalyst filters as separate pre-filters rather than blending them into the score.
 
 ---
 
