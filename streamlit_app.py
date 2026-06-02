@@ -425,16 +425,33 @@ with tab2:
     show_glossary()
     st.divider()
 
-    today_top = df[df["score"] > 9].head(5).copy()
+    # Require a real premarket gap — without gap_pct the score is driven
+    # purely by RVOL and breakout which can surface large caps on ordinary days.
+    # If no tickers have a real gap yet (early scan at 12:00 BST) show a warning
+    # rather than candidates that don't reflect genuine premarket momentum.
+    has_gap_data = bool((df["gap_pct"].abs() > 0.001).any())
+
+    if has_gap_data:
+        today_top = df[(df["score"] > 9) & (df["gap_pct"] > 0)].head(5).copy()
+    else:
+        today_top = pd.DataFrame()  # force the "no candidates" message
 
     if today_top.empty:
-        st.warning(
-            "No tickers above score 9 today. This can mean a few things: "
-            "it might be too early (the scan runs at 13:00 BST and premarket data populates from around then); "
-            "it might be a quiet day with no clear momentum; "
-            "or the market simply isn't showing the kind of activity this strategy looks for. "
-            "On days like this, the correct move is to sit out."
-        )
+        if not has_gap_data:
+            st.warning(
+                "No premarket gap data available yet — all gap_pct values are showing as 0. "
+                "This happens when the scan runs before meaningful premarket activity has built up (before about 13:00 BST / 08:00 ET). "
+                "The 13:00 BST scan should populate this correctly. "
+                "Candidates shown without a real gap are driven by RVOL and trend alone, "
+                "which is not a strong enough signal for this strategy on its own. "
+                "Check back after 13:00 BST when the next scan runs."
+            )
+        else:
+            st.warning(
+                "No tickers above score 9 with a real premarket gap today. "
+                "This is a valid outcome — it means the market isn't showing the kind of activity this strategy looks for. "
+                "The correct move is to sit out and wait for tomorrow."
+            )
     else:
         st.subheader("Morning candidates (13:00 scan)")
         st.caption(
