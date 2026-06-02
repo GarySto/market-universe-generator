@@ -1036,3 +1036,146 @@ with tab4:
         )
         st.markdown("""
 **trades.csv column format:**
+        """)
+    else:
+        total_trades  = len(trades)
+        wins          = len(trades[trades["return_pct"] >= 10])
+        losses        = len(trades[trades["return_pct"] < 0])
+        partials      = total_trades - wins - losses
+        win_rate      = wins / total_trades if total_trades > 0 else 0
+        total_pnl     = trades["return_gbp"].sum()
+        avg_return    = trades["return_pct"].mean()
+        current_bank  = 50 + total_pnl
+        trades_to_go  = max(0, 98 - total_trades)
+        best_trade    = trades["return_pct"].max()
+        worst_trade   = trades["return_pct"].min()
+
+        st.subheader("Performance at a glance")
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1.metric("Current bank", f"£{current_bank:.2f}", f"{'+' if total_pnl >= 0 else ''}£{total_pnl:.2f}")
+        k2.metric("Total trades", total_trades, f"{trades_to_go} to go")
+        k3.metric("Win rate", f"{win_rate*100:.0f}%", f"{wins}W / {losses}L")
+        k4.metric("Avg return", f"{avg_return:.1f}%")
+        k5.metric("Best trade", f"+{best_trade:.1f}%")
+        k6.metric("Worst trade", f"{worst_trade:.1f}%")
+
+        st.divider()
+        progress = min(current_bank / 1_000_000, 1.0)
+        st.subheader("Progress to £1,000,000")
+        st.progress(progress)
+        st.caption(f"£{current_bank:.2f} of £1,000,000 — {progress*100:.4f}% there. {trades_to_go} trades remaining at +10% compounding.")
+
+        st.divider()
+
+        col_l, col_r = st.columns(2)
+
+        with col_l:
+            st.subheader("Win / Loss breakdown")
+            st.caption("Win = +10% or above. Partial = positive but below 10%. Loss = negative.")
+            breakdown = pd.DataFrame({
+                "Result": ["Win", "Partial", "Loss"],
+                "Count":  [wins, partials, losses],
+            })
+            bar = (
+                alt.Chart(breakdown)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                .encode(
+                    x=alt.X("Result:N", sort=["Win","Partial","Loss"]),
+                    y=alt.Y("Count:Q", title="Number of trades"),
+                    color=alt.Color("Result:N",
+                        scale=alt.Scale(
+                            domain=["Win","Partial","Loss"],
+                            range=["#1d9e75","#f39c12","#c0392b"]),
+                        legend=None),
+                    tooltip=["Result","Count"]
+                )
+                .properties(height=220)
+            )
+            st.altair_chart(bar, use_container_width=True)
+
+        with col_r:
+            st.subheader("Return % per trade")
+            st.caption("Each bar is one trade. The amber dashed line is your +10% target.")
+            if "ticker" in trades.columns:
+                trades["label"] = trades["ticker"] + " " + trades.get("date", pd.Series(range(len(trades)))).astype(str)
+            else:
+                trades["label"] = [f"Trade {i+1}" for i in range(len(trades))]
+
+            trades["bar_color"] = trades["return_pct"].apply(
+                lambda x: "Win" if x >= 10 else ("Partial" if x > 0 else "Loss")
+            )
+            returns_chart = (
+                alt.Chart(trades)
+                .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+                .encode(
+                    x=alt.X("label:N", title="Trade", axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("return_pct:Q", title="Return (%)"),
+                    color=alt.Color("bar_color:N",
+                        scale=alt.Scale(domain=["Win","Partial","Loss"],
+                                        range=["#1d9e75","#f39c12","#c0392b"]),
+                        legend=None),
+                    tooltip=["label","return_pct","return_gbp"]
+                )
+                .properties(height=220)
+            )
+            target_line = (
+                alt.Chart(pd.DataFrame({"y": [10]}))
+                .mark_rule(color="#f39c12", strokeDash=[5,3], strokeWidth=1.5)
+                .encode(y="y:Q")
+            )
+            st.altair_chart(returns_chart + target_line, use_container_width=True)
+
+        st.divider()
+        st.subheader("📈 Running bank — the line that matters")
+        st.caption("Starting from £50. Every trade adds or subtracts. This needs to keep going up and to the right.")
+
+        trades["trade_num"] = range(1, len(trades)+1)
+        bank_line = (
+            alt.Chart(trades)
+            .mark_line(point=True, color="#2E5FA3", strokeWidth=2)
+            .encode(
+                x=alt.X("trade_num:Q", title="Trade number"),
+                y=alt.Y("running_bank:Q", title="Bank (£)", scale=alt.Scale(zero=False)),
+                tooltip=["trade_num", "ticker", "return_pct", "running_bank"]
+            )
+            .properties(height=280)
+        )
+        start_line = (
+            alt.Chart(pd.DataFrame({"y": [50]}))
+            .mark_rule(color="#888888", strokeDash=[4,3], strokeWidth=1)
+            .encode(y="y:Q")
+        )
+        st.altair_chart(bank_line + start_line, use_container_width=True)
+
+        if "score" in trades.columns and trades["score"].notna().any():
+            st.divider()
+            st.subheader("Does a higher score mean a better trade?")
+            st.caption(
+                "This scatter shows whether the morning scanner score correlates with actual trade returns. "
+                "Ideally you want to see higher scores clustering toward the top. "
+                "If they don't, the scoring model needs reviewing."
+            )
+            score_scatter = (
+                alt.Chart(trades)
+                .mark_circle(size=80)
+                .encode(
+                    x=alt.X("score:Q", title="Morning score"),
+                    y=alt.Y("return_pct:Q", title="Return (%)"),
+                    color=alt.Color("bar_color:N",
+                        scale=alt.Scale(domain=["Win","Partial","Loss"],
+                                        range=["#1d9e75","#f39c12","#c0392b"]),
+                        legend=None),
+                    tooltip=["ticker","score","return_pct","gap_pct"]
+                )
+                .interactive()
+                .properties(height=260)
+            )
+            st.altair_chart(score_scatter, use_container_width=True)
+
+        st.divider()
+        st.subheader("Full trade log")
+        display_cols = [c for c in ["date","ticker","entry_time","exit_time",
+                                     "entry_price","exit_price","return_pct",
+                                     "win_loss","score","gap_pct","pretrade_check","why_picked","notes"]
+                        if c in trades.columns or c in ["return_pct","win_loss"]]
+        st.dataframe(trades[display_cols] if display_cols else trades, use_container_width=True)
