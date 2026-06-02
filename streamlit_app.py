@@ -432,7 +432,7 @@ with tab2:
     has_gap_data = bool((df["gap_pct"].abs() > 0.001).any())
 
     if has_gap_data:
-        today_top = df[(df["score"] > 9) & (df["gap_pct"] > 0)].head(5).copy()
+        today_top = df[(df["score"] > 10) & (df["gap_pct"] > 0)].head(5).copy()
     else:
         today_top = pd.DataFrame()  # force the "no candidates" message
 
@@ -455,7 +455,7 @@ with tab2:
     else:
         st.subheader("Morning candidates (13:00 scan)")
         st.caption(
-            "These are the stocks scoring above 9 from this morning's automated scan. "
+            "These are the stocks scoring above 10 with a real premarket gap from this morning's automated scan. "
             "They represent the strongest momentum signals available right now. "
             "Before trading any of them, run the pre-trade confirmation check below to make sure "
             "the momentum is still in play — a lot can change between 13:00 and 14:30."
