@@ -25,12 +25,10 @@ GLOSSARY = {
     "Premarket": "The trading session before the official US market open at 14:30 BST. Shares can be bought and sold but with lower volume and wider spreads than regular hours.",
 }
 
-
 def show_glossary():
     with st.expander("📖 What do these terms mean? (click to expand)"):
         for term, definition in GLOSSARY.items():
             st.markdown(f"**{term}** — {definition}")
-
 
 # ============================================================
 # HELPERS & DATA LOADING
@@ -43,7 +41,6 @@ def load_universe():
     df = df.drop_duplicates(subset="ticker", keep="first")
     df = df.sort_values("score", ascending=False).reset_index(drop=True)
     return df
-
 
 @st.cache_data(ttl=300)
 def fetch_live_scores(tickers):
@@ -58,8 +55,8 @@ def fetch_live_scores(tickers):
             yesterday_close = float(hist["Close"].iloc[-1])
             avg_vol = float(hist["Volume"].mean())
             pre_price = getattr(info, "pre_market_price", None) or yesterday_close
-            pre_vol = getattr(info, "pre_market_volume", None) or 0
-            gap_pct = (pre_price - yesterday_close) / yesterday_close if yesterday_close else 0
+            pre_vol   = getattr(info, "pre_market_volume", None) or 0
+            gap_pct        = (pre_price - yesterday_close) / yesterday_close if yesterday_close else 0
             premarket_rvol = pre_vol / avg_vol if avg_vol else 0
             rows.append({
                 "ticker":          ticker,
@@ -71,17 +68,6 @@ def fetch_live_scores(tickers):
         except Exception:
             continue
     return pd.DataFrame(rows) if rows else pd.DataFrame()
-
-
-def premarket_momentum_score(gap_pct, pre_rvol, breakout_score):
-    """
-    Same shape as in universe.py — used for live comparison.
-    """
-    return (
-        5 * gap_pct +
-        2 * pre_rvol +
-        2 * breakout_score
-    )
 
 
 def traffic_light(score_morning, score_now):
@@ -113,9 +99,12 @@ def score_one_day(target_date_str, tickers):
     This is the best available historical substitute for premarket gap — it captures
     stocks that actually opened significantly higher than where they closed the night before,
     which is what the live strategy is hunting for.
+
+    This means the backtest now surfaces stocks that genuinely gapped on that day,
+    not just stocks with high RVOL which could be any large-cap on any ordinary day.
     """
     target_date = date.fromisoformat(target_date_str)
-    end_dt = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+    end_dt   = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
     start_dt = datetime.combine(target_date, datetime.min.time()) - timedelta(days=20)
 
     records = []
@@ -126,22 +115,22 @@ def score_one_day(target_date_str, tickers):
             if hist.empty or len(hist) < 11:
                 continue
 
-            today_row = hist.iloc[-1]
-            yesterday_row = hist.iloc[-2]
+            today_row       = hist.iloc[-1]
+            yesterday_row   = hist.iloc[-2]
 
-            yesterday_close = float(yesterday_row["Close"])
-            today_open = float(today_row["Open"])
-            today_volume = float(today_row["Volume"])
+            yesterday_close  = float(yesterday_row["Close"])
+            today_open       = float(today_row["Open"])
+            today_volume     = float(today_row["Volume"])
 
             gap_pct = (today_open - yesterday_close) / yesterday_close if yesterday_close else 0
 
             hist_before = hist.iloc[:-1]
             last_10 = hist_before.tail(10)
-            avg_volume_10d = float(last_10["Volume"].mean())
-            high_10d = float(last_10["High"].max())
-            low_10d = float(last_10["Low"].min())
-            atr_10d = float((last_10["High"] - last_10["Low"]).mean())
-            trend_5d = int((hist_before["Close"].diff() > 0).tail(5).sum())
+            avg_volume_10d  = float(last_10["Volume"].mean())
+            high_10d        = float(last_10["High"].max())
+            low_10d         = float(last_10["Low"].min())
+            atr_10d         = float((last_10["High"] - last_10["Low"]).mean())
+            trend_5d        = int((hist_before["Close"].diff() > 0).tail(5).sum())
 
             rvol = today_volume / avg_volume_10d if avg_volume_10d else 0
 
@@ -152,24 +141,24 @@ def score_one_day(target_date_str, tickers):
             volatility_score = atr_10d / yesterday_close if yesterday_close else 0
 
             score = (
-                3 * gap_pct +
-                2 * rvol +
-                0.5 * trend_5d +
-                2 * breakout_score +
-                1 * volatility_score
+                3 * gap_pct
+                + 2 * rvol
+                + 0.5 * trend_5d
+                + 2 * breakout_score
+                + 1 * volatility_score
             )
 
             records.append({
-                "ticker":           t,
-                "score":            round(score, 4),
-                "gap_pct":          round(gap_pct, 4),
-                "rvol":             round(rvol, 4),
-                "premarket_rvol":   0.0,
-                "trend_5d":         trend_5d,
-                "breakout_score":   round(breakout_score, 4),
-                "volatility_score": round(volatility_score, 4),
-                "yesterday_close":  round(yesterday_close, 2),
-                "today_open":       round(today_open, 2),
+                "ticker":          t,
+                "score":           round(score, 4),
+                "gap_pct":         round(gap_pct, 4),
+                "rvol":            round(rvol, 4),
+                "premarket_rvol":  0.0,
+                "trend_5d":        trend_5d,
+                "breakout_score":  round(breakout_score, 4),
+                "volatility_score":round(volatility_score, 4),
+                "yesterday_close": round(yesterday_close, 2),
+                "today_open":      round(today_open, 2),
             })
         except Exception:
             continue
@@ -191,7 +180,7 @@ def fetch_intraday(ticker_str, trade_date_str):
     trade_date = date.fromisoformat(trade_date_str)
     bst = pytz.timezone("Europe/London")
     start = datetime.combine(trade_date, datetime.min.time())
-    end = start + timedelta(days=1)
+    end   = start + timedelta(days=1)
     try:
         ticker_obj = yf.Ticker(ticker_str)
         df = ticker_obj.history(
@@ -214,23 +203,20 @@ def fetch_intraday(ticker_str, trade_date_str):
             df = df.reset_index()
 
         df.columns = [str(c).strip() for c in df.columns]
-        time_col = next(
-            (c for c in df.columns if any(k in c.lower() for k in ["datetime", "date", "timestamp"])),
-            df.columns[0]
-        )
-        df = df.rename(columns={
-            time_col: "datetime",
-            "Open": "open", "High": "high",
-            "Low": "low", "Close": "close", "Volume": "volume"
-        })
-        for col in ["open", "high", "low", "close", "volume"]:
+        time_col = next((c for c in df.columns
+                         if any(k in c.lower() for k in ["datetime","date","timestamp"])),
+                        df.columns[0])
+        df = df.rename(columns={time_col: "datetime",
+                                 "Open":"open","High":"high",
+                                 "Low":"low","Close":"close","Volume":"volume"})
+        for col in ["open","high","low","close","volume"]:
             if col not in df.columns:
                 df[col] = 0
 
         df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
 
         window_start = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 12, 0)).astimezone(pytz.utc)
-        window_end = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 15, 0)).astimezone(pytz.utc)
+        window_end   = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 15, 0)).astimezone(pytz.utc)
         df = df[(df["datetime"] >= window_start) & (df["datetime"] < window_end)].copy()
         if df.empty:
             return pd.DataFrame()
@@ -238,7 +224,7 @@ def fetch_intraday(ticker_str, trade_date_str):
         df = df.reset_index(drop=True)
         df["bst_time"] = df["datetime"].apply(lambda x: x.astimezone(bst).strftime("%H:%M"))
 
-        entry_ref = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 13, 30)).astimezone(pytz.utc)
+        entry_ref   = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 13, 30)).astimezone(pytz.utc)
         market_open = bst.localize(datetime(trade_date.year, trade_date.month, trade_date.day, 14, 30)).astimezone(pytz.utc)
         df["mins_from_entry"] = df["datetime"].apply(lambda x: int((x - entry_ref).total_seconds() / 60))
         df["phase"] = df["datetime"].apply(lambda x: "post-open" if x >= market_open else "premarket")
@@ -255,9 +241,9 @@ def simulate_trade(candles, target_pct=0.10):
     entry_candidates = candles[candles["mins_from_entry"] >= 0]
     if entry_candidates.empty:
         return {}
-    entry_row = entry_candidates.iloc[0]
-    entry_price = float(entry_row["open"])
-    entry_time = entry_row["bst_time"]
+    entry_row    = entry_candidates.iloc[0]
+    entry_price  = float(entry_row["open"])
+    entry_time   = entry_row["bst_time"]
     target_price = entry_price * (1 + target_pct)
 
     result = {
@@ -275,39 +261,19 @@ def simulate_trade(candles, target_pct=0.10):
     for _, row in trade_window.iterrows():
         mins = int(row["mins_from_entry"])
         if float(row["high"]) >= target_price:
-            result.update({
-                "exit_price": round(target_price, 4),
-                "exit_time": row["bst_time"],
-                "exit_bst": row["bst_time"],
-                "hit_target": True
-            })
+            result.update({"exit_price": round(target_price, 4),
+                           "exit_time": row["bst_time"], "exit_bst": row["bst_time"],
+                           "hit_target": True})
             break
         if mins >= 75:
-            result.update({
-                "exit_price": round(float(row["close"]), 4),
-                "exit_time": row["bst_time"],
-                "exit_bst": row["bst_time"],
-                "hit_target": False
-            })
+            result.update({"exit_price": round(float(row["close"]), 4),
+                           "exit_time": row["bst_time"], "exit_bst": row["bst_time"],
+                           "hit_target": False})
             break
 
     if result["exit_price"] is not None:
         result["pct_return"] = round((result["exit_price"] - entry_price) / entry_price * 100, 2)
     return result
-
-
-@st.cache_data(ttl=300)
-def load_trades():
-    try:
-        df = pd.read_csv("trades.csv")
-    except FileNotFoundError:
-        return pd.DataFrame()
-    if df.empty:
-        return df
-    # Add pct_return if not present
-    if "entry_price" in df.columns and "exit_price" in df.columns and "pct_return" not in df.columns:
-        df["pct_return"] = (df["exit_price"] - df["entry_price"]) / df["entry_price"] * 100
-    return df
 
 
 # ============================================================
@@ -327,6 +293,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trad
 # ============================================================
 
 with tab1:
+
     st.markdown(
         "This tab shows today's full ranked universe of stocks — built each morning at 13:00 BST "
         "by the automated pipeline. The top of the list is where to look first. "
@@ -361,7 +328,7 @@ with tab1:
             .mark_circle(size=80)
             .encode(
                 x=alt.X("gap_pct:Q", title="Gap % (premarket vs yesterday's close)",
-                        axis=alt.Axis(format=".1%")),
+                         axis=alt.Axis(format=".1%")),
                 y=alt.Y("rvol:Q", title="RVOL (volume vs 10-day average)"),
                 color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
                                 legend=alt.Legend(title="Score")),
@@ -382,8 +349,8 @@ with tab1:
             .mark_circle(size=80)
             .encode(
                 x=alt.X("breakout_score:Q",
-                        title="Breakout score (0 = bottom of recent range, 1 = top)",
-                        scale=alt.Scale(domain=[0, 1])),
+                         title="Breakout score (0 = bottom of recent range, 1 = top)",
+                         scale=alt.Scale(domain=[0, 1])),
                 y=alt.Y("rvol:Q", title="RVOL (volume vs 10-day average)"),
                 color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
                                 legend=alt.Legend(title="Score")),
@@ -441,6 +408,7 @@ with tab1:
 # ============================================================
 
 with tab2:
+
     st.header("🚀 Trade Today")
     st.markdown(
         "This tab filters the morning scan down to your top candidates — stocks scoring above 9 "
@@ -534,10 +502,10 @@ with tab2:
                 merged = today_top[["ticker", "score", "gap_pct", "premarket_rvol", "breakout_score"]].merge(
                     live_df, on="ticker", how="left"
                 )
-                merged["live_score"] = premarket_momentum_score(
-                    merged["live_gap_pct"].fillna(0),
-                    merged["live_pre_rvol"].fillna(0),
-                    merged["breakout_score"].fillna(0),
+                merged["live_score"] = (
+                    3 * merged["live_gap_pct"].fillna(0)
+                    + 2 * merged["live_pre_rvol"].fillna(0)
+                    + 2 * merged["breakout_score"].fillna(0)
                 )
                 merged["score_delta"] = merged["live_score"] - merged["score"]
 
@@ -550,10 +518,7 @@ with tab2:
                     col2.metric("Ticker", row["ticker"])
                     col3.metric("Morning score", f"{row['score']:.2f}")
                     col4.metric("Live score", f"{row['live_score']:.2f}", delta=delta_str)
-                    col5.markdown(
-                        f"**{label}**  \n"
-                        f"Gap: {row['live_gap_pct']*100:.2f}%  |  Pre-mkt RVOL: {row['live_pre_rvol']:.2f}x"
-                    )
+                    col5.markdown(f"**{label}**  \nGap: {row['live_gap_pct']*100:.2f}%  |  Pre-mkt RVOL: {row['live_pre_rvol']:.2f}x")
 
                 st.divider()
 
@@ -580,11 +545,9 @@ with tab2:
                         .encode(
                             x=alt.X("ticker:N", title="Ticker"),
                             y=alt.Y("value:Q", axis=alt.Axis(format=fmt if "%" in fmt else None)),
-                            color=alt.Color(
-                                "when:N",
+                            color=alt.Color("when:N",
                                 scale=alt.Scale(domain=["Morning (13:00)", "Now"], range=["#4a9eff", "#ff7043"]),
-                                legend=alt.Legend(title="When")
-                            ),
+                                legend=alt.Legend(title="When")),
                             xOffset="when:N",
                             tooltip=["ticker", "when", alt.Tooltip("value:Q", format=fmt)]
                         )
@@ -595,13 +558,10 @@ with tab2:
                 st.subheader("Summary")
                 green = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🟢"]
                 amber = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🟡"]
-                red = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🔴"]
-                if green:
-                    st.success(f"**Still valid — momentum holding:** {', '.join(green)}")
-                if amber:
-                    st.warning(f"**Fading — proceed with caution:** {', '.join(amber)}")
-                if red:
-                    st.error(f"**Gone — momentum lost, skip these today:** {', '.join(red)}")
+                red   = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🔴"]
+                if green: st.success(f"**Still valid — momentum holding:** {', '.join(green)}")
+                if amber: st.warning(f"**Fading — proceed with caution:** {', '.join(amber)}")
+                if red:   st.error(f"**Gone — momentum lost, skip these today:** {', '.join(red)}")
         else:
             st.info("Press the button above around 14:00–14:15 BST to run the pre-trade confirmation check.")
 
@@ -613,6 +573,7 @@ with tab2:
 # ============================================================
 
 with tab3:
+
     st.header("📅 14-Day Backtest")
     st.markdown(
         "This re-scores each trading day in the last 14 days using only the data that would have "
@@ -629,98 +590,390 @@ with tab3:
 **What the scores mean here vs in live trading**
 
 The backtest uses the same scoring formula as the live scanner, but with one critical difference:
-historical premarket prices aren't available via the data source (yfinance). Instead, the gap proxy is:
+historical premarket prices aren't available via the data source (yfinance). This means **gap_pct
+is always 0 in backtest scores**, even if the stock did gap significantly on that day.
 
-> (today's open - yesterday's close) / yesterday's close
+In live trading, gap_pct carries the highest weight (3×) in the scoring formula — it's the
+strongest signal. In the backtest, scores are driven entirely by RVOL, trend, and breakout score.
+This means:
 
-That means:
-- It only captures stocks that **actually opened** significantly higher than they closed.
-- It won't see overnight premarket moves that faded before the open.
+- **Large-cap stocks (DELL, HPQ, MSFT etc.) can score higher than they deserve** in the backtest,
+  because they consistently have high RVOL due to their trading volume — even on ordinary days when
+  there's no real momentum story. A stock like DELL scoring 8 in the backtest might only score 4
+  in live trading if there's no premarket gap. Conversely, a small-cap that gaps 15% in premarket
+  could score 3 in the backtest but 18 in live trading.
 
-So the backtest is conservative: if something looks good here, it genuinely opened strong on that day.
+- **The backtest is therefore best used to validate the candle behaviour and timing of your strategy**
+  — does +10% get hit within 75 minutes for stocks that genuinely had momentum? — rather than to
+  validate the scoring model itself.
+
+- **Losses in the backtest don't necessarily mean the strategy is broken.** If a stock scored well
+  only because of high RVOL (and not because of a real gap), it wouldn't have appeared in your
+  live top 5 in the first place.
+
+**Premarket candle data availability**
+
+The 1-minute candle chart tries to show premarket activity from 12:00 BST. However, premarket
+candle data availability varies significantly by ticker. Large liquid names (AAPL, NVDA, MSFT)
+almost always have it. Smaller or less-traded names often don't — yfinance simply doesn't hold
+that data. If you see a chart with no candles before 14:30, it doesn't mean nothing happened in
+premarket; it means the data isn't available for that ticker.
+
+**Data age limit**
+
+yfinance holds approximately 30 days of 1-minute candle data. This backtest is capped at 14 days
+because data quality and completeness drops significantly beyond that. Stick to the last 7–10 days
+for the most reliable candle charts.
         """)
 
+    st.divider()
+
     trading_days = get_trading_days(14)
-    if not trading_days:
-        st.warning("No recent trading days available.")
-    else:
-        day_strs = [d.isoformat() for d in trading_days]
-        selected_day_str = st.selectbox(
-            "Choose a backtest day (most recent first):",
-            options=day_strs,
-            format_func=lambda s: date.fromisoformat(s).strftime("%A %d %B %Y"),
+    day_options  = [d.isoformat() for d in trading_days]
+
+    col_left, col_right = st.columns([1, 2])
+    with col_left:
+        selected_date_str = st.selectbox(
+            "Select a trading day (last 14 trading days)",
+            options=day_options,
+            format_func=lambda d: datetime.strptime(d, "%Y-%m-%d").strftime("%A %-d %B %Y"),
+        )
+    with col_right:
+        st.caption(
+            "The most recent days will give the most complete candle data. "
+            "Older dates may have gaps in the 1-minute candle chart."
         )
 
-        if selected_day_str:
-            with st.spinner("Scoring universe for that day..."):
-                bt_df = score_one_day(selected_day_str, df["ticker"].tolist())
+    try:
+        with open("tickers.txt") as f:
+            bt_tickers = [t.strip() for t in f if t.strip() and t.strip() != "Ticker"]
+    except Exception:
+        bt_tickers = df["ticker"].tolist()
 
-            if bt_df.empty:
-                st.error("No data available for that day — yfinance may not have enough history for some tickers.")
+    if st.button("Score this day"):
+        with st.spinner(f"Scoring {selected_date_str} — this takes 30–60 seconds for ~250 tickers..."):
+            day_df = score_one_day(selected_date_str, bt_tickers)
+
+        if day_df.empty:
+            st.error(
+                "No data returned for this date. It may be a US market holiday, "
+                "or the data source is temporarily rate-limited. Try again or pick a different date."
+            )
+        else:
+            st.session_state["bt_day_df"]   = day_df
+            st.session_state["bt_date_str"] = selected_date_str
+
+    if "bt_day_df" in st.session_state and st.session_state.get("bt_date_str") == selected_date_str:
+        day_df = st.session_state["bt_day_df"]
+        formatted_date = datetime.strptime(selected_date_str, "%Y-%m-%d").strftime("%A %-d %B %Y")
+
+        st.divider()
+        st.subheader(f"Top candidates on {formatted_date}")
+        st.caption(
+            "These are the stocks that scored highest on this day using historical data. "
+            "Remember: gap_pct is 0 here because historical premarket prices aren't available. "
+            "Scores are driven by RVOL, trend, and breakout — which means large-cap, high-volume "
+            "stocks can appear higher than they would in live trading. "
+            "Use this to understand what the candle looked like, not to validate the score directly."
+        )
+
+        top5 = day_df.head(5)
+        st.dataframe(
+            top5[["ticker", "score", "gap_pct", "rvol", "trend_5d", "breakout_score", "volatility_score", "yesterday_close"]],
+            use_container_width=True
+        )
+        st.caption(
+            "**gap_pct here** is (today's open − yesterday's close) / yesterday's close — "
+            "the best available historical proxy for a premarket gap. "
+            "A value of 0.08 means the stock opened 8% higher than the previous close, "
+            "which is the kind of signal the live scanner looks for."
+        )
+
+        score_bar = (
+            alt.Chart(top5)
+            .mark_bar()
+            .encode(
+                x=alt.X("ticker:N", sort="-y", title="Ticker"),
+                y=alt.Y("score:Q", title="Backtest score"),
+                color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
+                                legend=alt.Legend(title="Score")),
+                tooltip=["ticker", "score", "gap_pct", "rvol", "trend_5d", "breakout_score"]
+            )
+        )
+        st.altair_chart(score_bar, use_container_width=True)
+
+        above_9 = day_df[day_df["score"] > 9]
+        if above_9.empty:
+            gappers = day_df[day_df["gap_pct"] > 0.03]
+            if not gappers.empty:
+                st.warning(
+                    f"No tickers scored above 9, but {len(gappers)} had a meaningful opening gap (>3%): "
+                    f"{', '.join(gappers.head(5)['ticker'].tolist())}. "
+                    "These would have been worth investigating in premarket even if the overall score was below threshold."
+                )
             else:
-                st.subheader("Top candidates for that day")
-                st.caption("These are the highest scoring tickers **as of that morning**, using only data available then.")
-                st.dataframe(bt_df.head(15), use_container_width=True)
+                st.warning(
+                    "No tickers scored above 9 on this day, and no meaningful opening gaps were detected. "
+                    "The strategy would have sat this day out — which is the correct call."
+                )
+        else:
+            st.success(
+                f"{len(above_9)} ticker(s) scored above 9: {', '.join(above_9['ticker'].tolist())}. "
+                "Note these scores exclude gap_pct — live scores would be higher for any stock "
+                "that was actually gapping on this day."
+            )
 
-                tickers_for_day = bt_df.head(15)["ticker"].tolist()
-                chosen_ticker = st.selectbox("Pick a ticker to simulate the trade:", options=tickers_for_day)
+        st.divider()
 
-                if chosen_ticker:
-                    with st.spinner("Fetching 1-minute candles for that day..."):
-                        candles = fetch_intraday(chosen_ticker, selected_day_str)
+        st.subheader("1-minute candle replay")
+        st.markdown(
+            "Pick a ticker to see the 1-minute candle chart for that morning — from 12:00 BST through "
+            "to 15:00 BST. This covers the premarket session and the first 30 minutes after the market "
+            "opens at 14:30 BST. "
+            "\n\n"
+            "The strategy simulates buying at the **open of the 13:30 BST candle** "
+            "(the start of your planned entry window), targeting **+10%**, "
+            "with a hard exit at **14:45 BST** if the target isn't reached. "
+            "\n\n"
+            "If you don't see premarket candles before 14:30, the data simply isn't available "
+            "for that ticker — this is a data limitation, not a chart error."
+        )
 
-                    if candles.empty:
-                        st.error("No intraday data available for that ticker/day combination.")
+        ticker_choice = st.selectbox(
+            "Which ticker do you want to look at?",
+            options=top5["ticker"].tolist(),
+            key="bt_ticker_select"
+        )
+
+        if st.button("Load candle chart", key="bt_load_candles"):
+            with st.spinner(f"Fetching 1-minute data for {ticker_choice} on {selected_date_str}..."):
+                candles = fetch_intraday(ticker_choice, selected_date_str)
+                st.session_state["bt_candles"]       = candles
+                st.session_state["bt_candle_ticker"] = ticker_choice
+
+        if "bt_candles" in st.session_state and st.session_state.get("bt_candle_ticker") == ticker_choice:
+            candles = st.session_state["bt_candles"]
+
+            if candles.empty:
+                st.error(
+                    "No 1-minute data returned for this ticker on this date. "
+                    "yfinance holds roughly 30 days of 1-minute data and coverage can be patchy "
+                    "for smaller stocks. Try a more recent date, or a more liquid ticker."
+                )
+            else:
+                result = simulate_trade(candles)
+
+                if not result:
+                    st.warning(
+                        "No candle found at 13:30 BST for this ticker. "
+                        "The data may start after 13:30, or there may be a gap in coverage around that time."
+                    )
+                else:
+                    entry_price  = result["entry_price"]
+                    target_price = result["target_price"]
+
+                    if result["hit_target"]:
+                        st.success(
+                            f"✅ **WIN** — +10% target hit at {result['exit_time']} BST.  "
+                            f"Entry: **${entry_price:.2f}** → Exit: **${target_price:.2f}** "
+                            f"(+{result['pct_return']:.1f}%)"
+                        )
+                    elif result["exit_price"] is not None:
+                        sign = "+" if result.get("pct_return", 0) > 0 else ""
+                        colour_fn = st.success if result.get("pct_return", 0) > 0 else st.error
+                        colour_fn(
+                            f"⏱️ **Time exit at 14:45 BST** — Target not reached.  "
+                            f"Entry: **${entry_price:.2f}** → Closed: **${result['exit_price']:.2f}** "
+                            f"({sign}{result['pct_return']:.1f}%)"
+                        )
                     else:
-                        sim = simulate_trade(candles, target_pct=0.10)
+                        st.warning("Not enough candle data to simulate the trade fully.")
 
-                        st.subheader(f"1-minute chart for {chosen_ticker} on {date.fromisoformat(selected_day_str).strftime('%d %B %Y')}")
-                        st.caption("Window: 12:00–15:00 BST. Entry at 13:30 BST, target +10%, hard exit 14:45 BST.")
+                    premarket_candles = candles[candles["phase"] == "premarket"]
+                    premarket_count = len(premarket_candles)
 
-                        base = alt.Chart(candles).encode(
-                            x=alt.X("bst_time:N", title="Time (BST)")
+                    if premarket_count == 0:
+                        st.warning(
+                            "⚠️ **No premarket candle data available for this ticker on this date.** "
+                            "The chart shows regular trading hours only (from 14:30 BST). "
+                            "This is a data availability issue — yfinance premarket coverage is inconsistent. "
+                            "Large-cap stocks like AAPL, NVDA and MSFT tend to have it; "
+                            "smaller names often don't. The win/loss result above is still valid "
+                            "based on what happened during regular hours. "
+                            "**Without premarket data you can't assess the run-up, which means you "
+                            "wouldn't have had the information needed to decide whether to buy this "
+                            "stock in the first place. The strategy depends on seeing the momentum build.**"
+                        )
+                    else:
+                        st.caption(
+                            f"Showing {premarket_count} premarket candles (12:00–14:29 BST) "
+                            f"plus regular hours to 15:00 BST."
                         )
 
-                        rule = base.mark_rule().encode(
-                            y="low:Q",
-                            y2="high:Q",
-                            color=alt.value("#888888"),
-                            tooltip=["bst_time", "open", "high", "low", "close", "volume"]
-                        )
+                        pm_open  = float(premarket_candles["open"].iloc[0])
+                        pm_entry = entry_price
 
-                        bar = base.mark_bar().encode(
-                            y="open:Q",
-                            y2="close:Q",
-                            color=alt.condition("datum.close >= datum.open",
-                                                alt.value("#2ecc71"),
-                                                alt.value("#e74c3c"))
-                        )
+                        pm_closes = premarket_candles["close"].values
+                        rising_candles = sum(1 for i in range(1, len(pm_closes)) if pm_closes[i] > pm_closes[i-1])
+                        pm_run_pct = (pm_entry - pm_open) / pm_open if pm_open > 0 else 0
+                        pm_trend_pct = rising_candles / max(len(pm_closes) - 1, 1)
 
-                        price_chart = (rule + bar).properties(height=400)
-
-                        if sim and sim.get("entry_price") is not None:
-                            target_line = alt.Chart(pd.DataFrame({
-                                "y": [sim["target_price"]],
-                                "label": ["Target +10%"]
-                            })).mark_rule(color="#f39c12", strokeDash=[4, 4]).encode(
-                                y="y:Q"
+                        if pm_run_pct >= 0.05 and pm_trend_pct >= 0.55:
+                            st.success(
+                                f"📈 **Strong premarket run detected** — price moved "
+                                f"+{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST, "
+                                f"with {rising_candles} of {len(pm_closes)-1} premarket candles closing up. "
+                                f"This is the kind of pattern the strategy is looking for — "
+                                f"visible momentum building before the market opens."
                             )
-                            price_chart = price_chart + target_line
+                        elif pm_run_pct >= 0.02 and pm_trend_pct >= 0.5:
+                            st.warning(
+                                f"📊 **Moderate premarket movement** — price moved "
+                                f"+{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"Some momentum present but not a strong conviction run. "
+                                f"In live trading you'd want to see a clearer directional move before buying."
+                            )
+                        elif pm_run_pct <= -0.02:
+                            st.error(
+                                f"📉 **Premarket was falling** — price dropped "
+                                f"{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"This is the opposite of what the strategy looks for. "
+                                f"In live trading, you would not have bought this stock."
+                            )
+                        else:
+                            st.info(
+                                f"➡️ **Flat premarket** — price moved only "
+                                f"{pm_run_pct*100:.1f}% from 12:00 to 13:30 BST. "
+                                f"No clear directional momentum. In live trading, a flat or "
+                                f"drifting premarket with no gap would typically mean this stock "
+                                f"wouldn't appear in your top candidates at all."
+                            )
 
-                        st.altair_chart(price_chart, use_container_width=True)
+                    candles["colour"] = candles.apply(
+                        lambda r: "up" if r["close"] >= r["open"] else "down", axis=1
+                    )
+                    price_scale = alt.Scale(zero=False)
 
-                        if sim:
-                            st.subheader("Simulated trade outcome")
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Entry price", f"${sim['entry_price']:.2f}", sim["entry_time"])
-                            if sim["exit_price"] is not None:
-                                col2.metric("Exit price", f"${sim['exit_price']:.2f}", sim["exit_time"])
-                                col3.metric("Return", f"{sim['pct_return']:.2f}%")
-                                col4.metric("Hit target?", "✅ Yes" if sim["hit_target"] else "❌ No")
-                            else:
-                                col2.metric("Exit price", "—")
-                                col3.metric("Return", "—")
-                                col4.metric("Hit target?", "—")
+                    x_enc = alt.X(
+                        "bst_time:O",
+                        title="Time (BST)",
+                        axis=alt.Axis(
+                            labelAngle=-45,
+                            tickMinStep=1,
+                            values=["12:00","12:30","13:00","13:30",
+                                    "14:00","14:30","14:45","15:00"]
+                        )
+                    )
+
+                    bodies = (
+                        alt.Chart(candles)
+                        .mark_bar(width=4)
+                        .encode(
+                            x=x_enc,
+                            y=alt.Y("open:Q", title="Price ($)", scale=price_scale),
+                            y2="close:Q",
+                            color=alt.Color("colour:N",
+                                scale=alt.Scale(domain=["up","down"], range=["#26a69a","#ef5350"]),
+                                legend=None),
+                            tooltip=[
+                                alt.Tooltip("bst_time:N",  title="Time (BST)"),
+                                alt.Tooltip("phase:N",     title="Session"),
+                                alt.Tooltip("open:Q",      title="Open",  format=".2f"),
+                                alt.Tooltip("high:Q",      title="High",  format=".2f"),
+                                alt.Tooltip("low:Q",       title="Low",   format=".2f"),
+                                alt.Tooltip("close:Q",     title="Close", format=".2f"),
+                            ]
+                        )
+                    )
+
+                    wicks = (
+                        alt.Chart(candles)
+                        .mark_rule(strokeWidth=1)
+                        .encode(
+                            x=x_enc,
+                            y=alt.Y("low:Q",  scale=price_scale),
+                            y2="high:Q",
+                            color=alt.Color("colour:N",
+                                scale=alt.Scale(domain=["up","down"], range=["#26a69a","#ef5350"]),
+                                legend=None),
+                        )
+                    )
+
+                    entry_line = (
+                        alt.Chart(pd.DataFrame({"y": [entry_price]}))
+                        .mark_rule(color="#cccccc", strokeWidth=1.5)
+                        .encode(y=alt.Y("y:Q", scale=price_scale))
+                    )
+
+                    target_line = (
+                        alt.Chart(pd.DataFrame({"y": [target_price]}))
+                        .mark_rule(color="#ffb300", strokeDash=[6, 3], strokeWidth=2)
+                        .encode(y=alt.Y("y:Q", scale=price_scale))
+                    )
+
+                    entry_vline = (
+                        alt.Chart(pd.DataFrame({"bst_time": ["13:30"]})).mark_rule(
+                            color="#aaaaaa", strokeDash=[4,2], strokeWidth=1.5
+                        ).encode(x=alt.X("bst_time:O"))
+                    )
+                    open_vline = (
+                        alt.Chart(pd.DataFrame({"bst_time": ["14:30"]})).mark_rule(
+                            color="#4a9eff", strokeDash=[4,2], strokeWidth=1.5
+                        ).encode(x=alt.X("bst_time:O"))
+                    )
+                    exit_vline = (
+                        alt.Chart(pd.DataFrame({"bst_time": ["14:45"]})).mark_rule(
+                            color="#ff4444", strokeDash=[4,2], strokeWidth=1.5
+                        ).encode(x=alt.X("bst_time:O"))
+                    )
+
+                    layers = [bodies, wicks, entry_line, target_line,
+                              entry_vline, open_vline, exit_vline]
+
+                    if result.get("exit_bst") and result.get("exit_price") is not None:
+                        exit_colour = "#ffb300" if result["hit_target"] else "#ff4444"
+                        exit_dot = (
+                            alt.Chart(pd.DataFrame({
+                                "bst_time": [result["exit_bst"]],
+                                "y":        [result["exit_price"]],
+                            }))
+                            .mark_point(size=180, shape="diamond", filled=True, color=exit_colour)
+                            .encode(
+                                x=alt.X("bst_time:O"),
+                                y=alt.Y("y:Q", scale=price_scale),
+                                tooltip=[
+                                    alt.Tooltip("bst_time:N", title="Exit time (BST)"),
+                                    alt.Tooltip("y:Q",        title="Exit price", format=".2f"),
+                                ]
+                            )
+                        )
+                        layers.append(exit_dot)
+
+                    chart = (
+                        alt.layer(*layers)
+                        .properties(
+                            height=420,
+                            title=(
+                                f"{ticker_choice} — {formatted_date}  |  "
+                                f"Entry 13:30 BST @ ${entry_price:.2f}  |  "
+                                f"Target ${target_price:.2f} (+10%)  |  "
+                                f"Hard exit 14:45 BST"
+                            )
+                        )
+                    )
+                    st.altair_chart(chart, use_container_width=True)
+
+                    col_a, col_b, col_c, col_d = st.columns(4)
+                    col_a.markdown(f"**⬜ Entry price (13:30 BST)**  \n${entry_price:.2f} — grey horizontal line")
+                    col_b.markdown(f"**🟡 +10% target**  \n${target_price:.2f} — amber dashed line")
+                    col_c.markdown(f"**🔵 Market open (14:30 BST)**  \nBlue dashed vertical")
+                    col_d.markdown(f"**🔴 Hard exit (14:45 BST)**  \nRed dashed vertical — close regardless")
+
+                    st.caption(
+                        "Green candles = price closed up that minute. Red = closed down. "
+                        "The diamond marker shows the actual exit point. "
+                        "Hover over any candle for the exact open/high/low/close."
+                    )
 
 
 # ============================================================
@@ -728,75 +981,58 @@ So the backtest is conservative: if something looks good here, it genuinely open
 # ============================================================
 
 with tab4:
+
     st.header("📒 My Trades")
     st.markdown(
-        "This tab tracks your actual trades — not the backtest. "
-        "Each row in `trades.csv` is one real trade with its own notes and context."
+        "This tab tracks every trade made using the scanner. "
+        "The data comes from `trades.csv` in the repository — updated manually after each trade. "
+        "Win = +10% or above. Partial = positive but below 10%. Loss = negative return."
     )
 
     show_glossary()
     st.divider()
 
-    trades = load_trades()
-    if trades.empty:
-        st.info("No trades logged yet. Add rows to `trades.csv` to see them here.")
-    else:
-        st.subheader("Trade log")
-        st.dataframe(trades, use_container_width=True)
+    try:
+        trades = pd.read_csv("trades.csv")
+        trades.columns = [c.strip() for c in trades.columns]
+        trades = trades.dropna(how="all")
 
-        st.divider()
+        has_trades = (
+            len(trades) > 0 and
+            "ticker" in trades.columns and
+            trades["ticker"].notna().any() and
+            trades["ticker"].astype(str).str.strip().ne("").any()
+        )
 
-        st.subheader("Summary stats")
-        num_trades = len(trades)
-        avg_return = trades["pct_return"].mean() if "pct_return" in trades.columns else None
-        wins = trades[trades["pct_return"] > 0].shape[0] if "pct_return" in trades.columns else 0
-        win_rate = (wins / num_trades * 100) if num_trades > 0 else 0
+        if has_trades:
+            for col in ["entry_price", "exit_price", "shares", "running_bank", "score", "gap_pct", "rvol"]:
+                if col in trades.columns:
+                    trades[col] = pd.to_numeric(trades[col], errors="coerce")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Number of trades", num_trades)
-        if avg_return is not None:
-            c2.metric("Average % return", f"{avg_return:.2f}%")
-        else:
-            c2.metric("Average % return", "—")
-        c3.metric("Win rate", f"{win_rate:.1f}%")
-
-        st.divider()
-
-        if "running_bank" in trades.columns:
-            st.subheader("Equity curve (running bank)")
-            eq_chart = (
-                alt.Chart(trades.reset_index())
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X("index:Q", title="Trade number"),
-                    y=alt.Y("running_bank:Q", title="Running bank (£)"),
-                    tooltip=["date", "ticker", "running_bank"]
-                )
+            trades["return_gbp"] = (
+                (trades["exit_price"] - trades["entry_price"]) * trades["shares"]
+            ).round(2)
+            trades["return_pct"] = (
+                (trades["exit_price"] - trades["entry_price"]) / trades["entry_price"] * 100
+            ).round(2)
+            trades["win_loss"] = trades["return_pct"].apply(
+                lambda x: "Win" if pd.notna(x) and x >= 10
+                else ("Partial" if pd.notna(x) and x > 0
+                else ("Loss" if pd.notna(x) else ""))
             )
-            st.altair_chart(eq_chart, use_container_width=True)
 
-        if "pct_return" in trades.columns:
-            st.subheader("Distribution of trade returns")
-            hist = (
-                alt.Chart(trades)
-                .mark_bar()
-                .encode(
-                    x=alt.X("pct_return:Q", bin=alt.Bin(maxbins=20), title="% return"),
-                    y=alt.Y("count():Q", title="Number of trades"),
-                    tooltip=["count()"]
-                )
-            )
-            st.altair_chart(hist, use_container_width=True)
+    except FileNotFoundError:
+        has_trades = False
+        trades = pd.DataFrame()
+    except Exception:
+        has_trades = False
+        trades = pd.DataFrame()
 
-            st.subheader("Average return by ticker")
-            by_ticker = trades.groupby("ticker", as_index=False)["pct_return"].mean()
-            bar = (
-                alt.Chart(by_ticker)
-                .mark_bar()
-                .encode(
-                    x=alt.X("ticker:N", sort="-y", title="Ticker"),
-                    y=alt.Y("pct_return:Q", title="Average % return"),
-                    tooltip=["ticker", "pct_return"]
-                )
-            )
-            st.altair_chart(bar, use_container_width=True)
+    if not has_trades:
+        st.info(
+            "No trades logged yet. Once you make your first trade, add a row to `trades.csv` "
+            "in your GitHub repo and it will appear here automatically. "
+            "Use the Excel tracker to log trades, then export the data as CSV and commit it."
+        )
+        st.markdown("""
+**trades.csv column format:**
