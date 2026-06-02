@@ -18,7 +18,8 @@ def build_universe(target_date=None):
     if target_date is None:
         target_date = datetime.utcnow().date()
 
-    end_dt   = datetime.combine(target_date, datetime.min.time())
+    # Use last 20 calendar days of data to build 10-day baselines
+    end_dt = datetime.combine(target_date, datetime.min.time())
     start_dt = end_dt - timedelta(days=20)
 
     for t in tickers:
@@ -31,7 +32,7 @@ def build_universe(target_date=None):
                 print(f"Skipping {t}: insufficient history")
                 continue
 
-            yesterday_close  = float(hist["Close"].iloc[-1])
+            yesterday_close = float(hist["Close"].iloc[-1])
             yesterday_volume = float(hist["Volume"].iloc[-1])
 
             # Minimum price filter — penny stocks have wide spreads in premarket
@@ -39,24 +40,24 @@ def build_universe(target_date=None):
                 print(f"Skipping {t}: price ${yesterday_close:.2f} below $1 minimum")
                 continue
 
-            last_10        = hist.tail(10)
+            last_10 = hist.tail(10)
             avg_volume_10d = float(last_10["Volume"].mean())
-            high_10d       = float(last_10["High"].max())
-            low_10d        = float(last_10["Low"].min())
-            atr_10d        = float((last_10["High"] - last_10["Low"]).mean())
-            trend_5d       = int((hist["Close"].diff() > 0).tail(5).sum())
+            high_10d = float(last_10["High"].max())
+            low_10d = float(last_10["Low"].min())
+            atr_10d = float((last_10["High"] - last_10["Low"]).mean())
+            trend_5d = int((hist["Close"].diff() > 0).tail(5).sum())
 
             # ── Premarket data via .info dict ────────────────────────────────
             # fast_info does NOT expose premarket price in current yfinance.
             # .info is slower but contains preMarketPrice and preMarketVolume.
-            # These only populate during active premarket hours (09:00-09:30 ET
-            # = 14:00-14:30 BST). Outside those hours they return None.
-            premarket_price  = None
+            # These only populate during active premarket hours (09:00–09:30 ET
+            # = 14:00–14:30 BST). Outside those hours they return None.
+            premarket_price = None
             premarket_volume = 0
 
             try:
                 info = ticker.info
-                premarket_price  = info.get("preMarketPrice")
+                premarket_price = info.get("preMarketPrice")
                 premarket_volume = info.get("preMarketVolume") or 0
             except Exception:
                 pass
@@ -66,43 +67,69 @@ def build_universe(target_date=None):
                 premarket_price = yesterday_close
 
             # ── Feature engineering ──────────────────────────────────────────
-            gap_pct        = (premarket_price - yesterday_close) / yesterday_close
-            rvol           = yesterday_volume / avg_volume_10d if avg_volume_10d else 0
+            gap_pct = (premarket_price - yesterday_close) / yesterday_close
+            rvol = yesterday_volume / avg_volume_10d if avg_volume_10d else 0
             premarket_rvol = premarket_volume / avg_volume_10d if avg_volume_10d else 0
 
             breakout_score = (
                 (yesterday_close - low_10d) / (high_10d - low_10d)
-                if high_10d != low_10d else 0
+                if high_10d != low_10d
+                else 0
             )
             volatility_score = atr_10d / yesterday_close if yesterday_close else 0
 
-            # ── Momentum score ───────────────────────────────────────────────
-            # gap_pct (3x) is the dominant signal — a real premarket gap with
-            # volume is the strongest indicator for this strategy.
-            # Without a gap, maximum score from remaining signals is ~10-11,
-            # which means stocks with no premarket story stay below threshold.
+            # Direction label for clarity
+            direction = "up" if gap_pct > 0 else "down"
+
+            # Premarket momentum proxy: only cares about positive gaps
+            # and rewards when there is both a gap and premarket volume.
+            premarket_momentum_score = max(gap_pct, 0) * (1 + premarket_rvol)
+
+            # ── Raw momentum score (for diagnostics) ─────────────────────────
+            # This is close to what you had, just kept as a reference.
             score = (
-                5   * gap_pct
+                5 * gap_pct
                 + 1.5 * rvol
                 + 2 * breakout_score
                 + 1 * volatility_score
                 + 0.5 * trend_5d
             )
 
-            records.append({
-                "ticker":           t,
-                "premarket_price":  round(premarket_price, 2),
-                "premarket_volume": int(premarket_volume),
-                "score":            round(score, 4),
-                "gap_pct":          round(gap_pct, 4),
-                "rvol":             round(rvol, 4),
-                "premarket_rvol":   round(premarket_rvol, 4),
-                "avg_volume_10d":   int(avg_volume_10d),
-                "trend_5d":         trend_5d,
-                "breakout_score":   round(breakout_score, 4),
-                "atr_10d":          round(atr_10d, 4),
-                "volatility_score": round(volatility_score, 4),
-            })
+            # ── Long-only score ─────────────────────────────────────────────
+            # If the gap is negative, this stock is NOT a long candidate,
+            # regardless of how crazy the RVOL is. NAMM-style sell-offs get
+            # a score_long of 0 and will not appear in long-only views.
+            if gap_pct > 0:
+                score_long = (
+                    5 * gap_pct
+                    + 1.5 * rvol
+                    + 2 * breakout_score
+                    + 1 * volatility_score
+                    + 0.5 * trend_5d
+                    + 2 * premarket_momentum_score
+                )
+            else:
+                score_long = 0.0
+
+            records.append(
+                {
+                    "ticker": t,
+                    "premarket_price": round(premarket_price, 2),
+                    "premarket_volume": int(premarket_volume),
+                    "score": round(score, 4),
+                    "score_long": round(score_long, 4),
+                    "gap_pct": round(gap_pct, 4),
+                    "rvol": round(rvol, 4),
+                    "premarket_rvol": round(premarket_rvol, 4),
+                    "avg_volume_10d": int(avg_volume_10d),
+                    "trend_5d": trend_5d,
+                    "breakout_score": round(breakout_score, 4),
+                    "atr_10d": round(atr_10d, 4),
+                    "volatility_score": round(volatility_score, 4),
+                    "premarket_momentum_score": round(premarket_momentum_score, 4),
+                    "direction": direction,
+                }
+            )
 
         except Exception as e:
             print(f"Skipping {t}: {e}")
@@ -113,7 +140,8 @@ def build_universe(target_date=None):
         return pd.DataFrame()
 
     df = pd.DataFrame(records)
-    df = df.sort_values("score", ascending=False).reset_index(drop=True)
+    # Sort by long-only score so “up-gap” names naturally float to the top
+    df = df.sort_values("score_long", ascending=False).reset_index(drop=True)
     return df
 
 
@@ -122,12 +150,24 @@ if __name__ == "__main__":
     if not df.empty:
         df.to_csv("output/universe.csv", index=False)
         print(f"Universe written — {len(df)} tickers scored")
-        top5 = df[df["score"] > 9].head(5)
+        top5 = df[df["score_long"] > 9].head(5)
         if not top5.empty:
-            print(f"\nTop candidates (score > 9):")
-            print(top5[["ticker", "score", "gap_pct", "rvol",
-                         "premarket_price", "breakout_score"]].to_string(index=False))
+            print("\nTop candidates (score_long > 9):")
+            print(
+                top5[
+                    [
+                        "ticker",
+                        "score_long",
+                        "gap_pct",
+                        "rvol",
+                        "premarket_price",
+                        "breakout_score",
+                        "premarket_rvol",
+                        "premarket_momentum_score",
+                    ]
+                ].to_string(index=False)
+            )
         else:
-            print("\nNo tickers above score 9 today")
+            print("\nNo tickers above score_long 9 today")
     else:
         print("No data written")
