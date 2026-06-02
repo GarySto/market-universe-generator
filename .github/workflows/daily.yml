@@ -2,8 +2,8 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — morning scan
-    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — re-score + alert check
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — early scan, gap data may be sparse
+    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — main scan, premarket data reliable
     - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final check before open
   workflow_dispatch:
 
@@ -27,10 +27,11 @@ jobs:
         run: python universe.py
 
       - name: Send alert email (if strong candidates found)
+        continue-on-error: true
         env:
-          OUTLOOK_USER:     ${{ secrets.OUTLOOK_USER }}
-          OUTLOOK_PASSWORD: ${{ secrets.OUTLOOK_PASSWORD }}
-          ALERT_EMAILS:     ${{ secrets.ALERT_EMAILS }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+          ALERT_EMAILS:   ${{ secrets.ALERT_EMAILS }}
         run: python send_alert.py
 
       - name: Commit results
