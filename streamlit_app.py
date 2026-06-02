@@ -12,7 +12,7 @@ st.set_page_config(page_title="Momentum Scanner", layout="wide")
 # ============================================================
 
 GLOSSARY = {
-    "Score": "The overall momentum score — a weighted combination of all the signals below. Higher is better. The strategy targets stocks scoring above 9 on a live trading day.",
+    "Score": "The overall momentum score — a weighted combination of all the signals below. Higher is better. The strategy targets stocks scoring above 7 on a live trading day (scores are now normalised to a 0–12.5 scale).",
     "Gap % (gap_pct)": "How much the premarket price has moved compared to yesterday's closing price, expressed as a fraction. A gap of 0.05 means the stock is up 5% before the market opens. This is the strongest signal — stocks that gap up significantly with volume behind them tend to keep moving.",
     "RVOL (rvol)": "Relative Volume — yesterday's trading volume divided by the 10-day average volume. A reading of 2.0 means twice the normal volume traded. High RVOL suggests elevated interest in the stock.",
     "Premarket RVOL (premarket_rvol)": "The same RVOL calculation but applied to premarket volume specifically. A fresher signal than regular RVOL — if volume is building before the market opens, that's worth paying attention to.",
@@ -44,18 +44,30 @@ def load_universe():
 
 @st.cache_data(ttl=300)
 def fetch_live_scores(tickers):
+    """
+    Fetch live premarket data for the given tickers.
+    Uses ticker.info (same as universe.py) — fast_info.pre_market_price is broken in
+    current yfinance and returns None, causing gap to always show as 0.
+    """
     rows = []
     for ticker in tickers:
         try:
             t = yf.Ticker(ticker)
-            info = t.fast_info
-            hist = t.history(period="5d")
-            if hist.empty:
+            hist = t.history(period="10d")
+            if hist.empty or len(hist) < 2:
                 continue
             yesterday_close = float(hist["Close"].iloc[-1])
             avg_vol = float(hist["Volume"].mean())
-            pre_price = getattr(info, "pre_market_price", None) or yesterday_close
-            pre_vol   = getattr(info, "pre_market_volume", None) or 0
+
+            # Use .info like universe.py — this is the working attribute
+            try:
+                info = t.info
+                pre_price = info.get("preMarketPrice") or yesterday_close
+                pre_vol   = info.get("preMarketVolume") or 0
+            except Exception:
+                pre_price = yesterday_close
+                pre_vol   = 0
+
             gap_pct        = (pre_price - yesterday_close) / yesterday_close if yesterday_close else 0
             premarket_rvol = pre_vol / avg_vol if avg_vol else 0
             rows.append({
@@ -100,8 +112,9 @@ def score_one_day(target_date_str, tickers):
     stocks that actually opened significantly higher than where they closed the night before,
     which is what the live strategy is hunting for.
 
-    This means the backtest now surfaces stocks that genuinely gapped on that day,
-    not just stocks with high RVOL which could be any large-cap on any ordinary day.
+    Scoring now uses the same min-max normalisation as universe.py so backtest scores
+    sit on the same 0–12.5 scale as live scores, making comparisons valid.
+    Long-only rule applied: negative gap → score = 0.
     """
     target_date = date.fromisoformat(target_date_str)
     end_dt   = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
@@ -140,20 +153,11 @@ def score_one_day(target_date_str, tickers):
             )
             volatility_score = atr_10d / yesterday_close if yesterday_close else 0
 
-            score = (
-                3 * gap_pct
-                + 2 * rvol
-                + 0.5 * trend_5d
-                + 2 * breakout_score
-                + 1 * volatility_score
-            )
-
             records.append({
                 "ticker":          t,
-                "score":           round(score, 4),
                 "gap_pct":         round(gap_pct, 4),
                 "rvol":            round(rvol, 4),
-                "premarket_rvol":  0.0,
+                "premarket_rvol":  0.0,   # not available historically
                 "trend_5d":        trend_5d,
                 "breakout_score":  round(breakout_score, 4),
                 "volatility_score":round(volatility_score, 4),
@@ -165,7 +169,51 @@ def score_one_day(target_date_str, tickers):
 
     if not records:
         return pd.DataFrame()
-    df = pd.DataFrame(records).sort_values("score", ascending=False).reset_index(drop=True)
+
+    df = pd.DataFrame(records)
+
+    # ── Normalise exactly as universe.py ──────────────────────────────────
+    def _safe_mm(series):
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if s.empty:
+            return 0.0, 1.0
+        mn, mx = float(s.min()), float(s.max())
+        return (mn, mn + 1.0) if mx == mn else (mn, mx)
+
+    def _norm(series, mn, mx):
+        return (series - mn) / (mx - mn) if mx != mn else series * 0.0
+
+    gap_mn,  gap_mx  = _safe_mm(df["gap_pct"])
+    rvol_mn, rvol_mx = _safe_mm(df["rvol"])
+    brk_mn,  brk_mx  = _safe_mm(df["breakout_score"])
+    vol_mn,  vol_mx  = _safe_mm(df["volatility_score"])
+
+    df["norm_gap"]        = _norm(df["gap_pct"],          gap_mn,  gap_mx)
+    df["norm_rvol"]       = _norm(df["rvol"],             rvol_mn, rvol_mx)
+    df["norm_breakout"]   = _norm(df["breakout_score"],   brk_mn,  brk_mx)
+    df["norm_volatility"] = _norm(df["volatility_score"], vol_mn,  vol_mx)
+    df["norm_trend"]      = df["trend_5d"] / 5.0
+
+    # No premarket_rvol historically — premarket_momentum uses gap only
+    pm_raw = df["norm_gap"].clip(lower=0)
+    pm_mn, pm_mx = _safe_mm(pm_raw)
+    df["premarket_momentum"] = _norm(pm_raw, pm_mn, pm_mx)
+
+    base_score = (
+        5.0 * df["premarket_momentum"] +
+        3.0 * df["norm_gap"] +
+        2.0 * df["norm_breakout"] +
+        1.0 * df["norm_rvol"] +
+        1.0 * df["norm_trend"] +
+        0.5 * df["norm_volatility"]
+    )
+
+    score = base_score.copy()
+    score[df["gap_pct"] < 0] = 0.0  # long-only rule
+    df["score"] = score.round(4)
+    # ── End normalisation ─────────────────────────────────────────────────
+
+    df = df.sort_values("score", ascending=False).reset_index(drop=True)
     return df
 
 
@@ -297,7 +345,7 @@ with tab1:
     st.markdown(
         "This tab shows today's full ranked universe of stocks — built each morning at 13:00 BST "
         "by the automated pipeline. The top of the list is where to look first. "
-        "Anything scoring above 9 with a meaningful gap and high RVOL is worth investigating further."
+        "Anything scoring above 7 with a meaningful gap and high RVOL is worth investigating further."
     )
     show_glossary()
     st.divider()
@@ -411,7 +459,7 @@ with tab2:
 
     st.header("🚀 Trade Today")
     st.markdown(
-        "This tab filters the morning scan down to your top candidates — stocks scoring above 9 "
+        "This tab filters the morning scan down to your top candidates — stocks scoring above 7 "
         "with strong momentum signals. The strategy is to buy in premarket between 13:00 and 14:15 BST, "
         "target a **+10% return**, and exit no later than **14:45 BST** (15 minutes after market open) "
         "regardless of outcome. The pre-trade confirmation check below lets you verify momentum is still "
@@ -423,7 +471,10 @@ with tab2:
     has_gap_data = bool((df["gap_pct"].abs() > 0.001).any())
 
     if has_gap_data:
-        today_top = df[(df["score"] > 10) & (df["gap_pct"] > 0)].head(5).copy()
+        # Threshold is 7 (not 10) — scores are now normalised to a 0–12.5 scale
+        # where the theoretical max is 5+3+2+1+1+0.5 = 12.5. A score of 7 means
+        # the stock is in roughly the top tier across all signals.
+        today_top = df[(df["score"] > 7) & (df["gap_pct"] > 0)].head(5).copy()
     else:
         today_top = pd.DataFrame()
 
@@ -439,14 +490,14 @@ with tab2:
             )
         else:
             st.warning(
-                "No tickers above score 9 with a real premarket gap today. "
+                "No tickers above score 7 with a real premarket gap today. "
                 "This is a valid outcome — it means the market isn't showing the kind of activity this strategy looks for. "
                 "The correct move is to sit out and wait for tomorrow."
             )
     else:
         st.subheader("Morning candidates (13:00 scan)")
         st.caption(
-            "These are the stocks scoring above 10 with a real premarket gap from this morning's automated scan. "
+            "These are the stocks scoring above 7 with a real premarket gap from this morning's automated scan. "
             "They represent the strongest momentum signals available right now. "
             "Before trading any of them, run the pre-trade confirmation check below to make sure "
             "the momentum is still in play — a lot can change between 13:00 and 14:30."
@@ -461,7 +512,7 @@ with tab2:
         )
 
         st.subheader("📊 Morning score comparison")
-        st.caption("Colour goes from red (lower score) to green (higher score). Only stocks above 9 shown.")
+        st.caption("Colour goes from red (lower score) to green (higher score). Only stocks above 7 shown.")
         score_chart = (
             alt.Chart(today_top)
             .mark_bar()
@@ -502,11 +553,35 @@ with tab2:
                 merged = today_top[["ticker", "score", "gap_pct", "premarket_rvol", "breakout_score"]].merge(
                     live_df, on="ticker", how="left"
                 )
+
+                # Live score: normalise live signals relative to each other (cross-sectional),
+                # then apply the same weights as universe.py so the comparison is valid.
+                # With only a handful of tickers here, we use their live values directly
+                # and scale each signal to [0,1] across the small set.
+                def _live_norm(series):
+                    mn, mx = series.min(), series.max()
+                    if mx == mn:
+                        return series * 0.0
+                    return (series - mn) / (mx - mn)
+
+                lg = merged["live_gap_pct"].fillna(0).clip(lower=0)
+                lr = merged["live_pre_rvol"].fillna(0)
+                lb = merged["breakout_score"].fillna(0)
+
+                lg_n = _live_norm(lg)
+                lr_n = _live_norm(lr)
+                lb_n = _live_norm(lb)
+
+                # premarket_momentum = norm_gap (no live premarket_rvol blend needed for a handful of tickers)
+                pm_n = lg_n  # gap dominates momentum signal live
+
                 merged["live_score"] = (
-                    3 * merged["live_gap_pct"].fillna(0)
-                    + 2 * merged["live_pre_rvol"].fillna(0)
-                    + 2 * merged["breakout_score"].fillna(0)
-                )
+                    5.0 * pm_n +
+                    3.0 * lg_n +
+                    2.0 * lb_n +
+                    1.0 * lr_n
+                ).round(4)
+
                 merged["score_delta"] = merged["live_score"] - merged["score"]
 
                 st.subheader("Traffic light status")
@@ -702,23 +777,23 @@ for the most reliable candle charts.
         )
         st.altair_chart(score_bar, use_container_width=True)
 
-        above_9 = day_df[day_df["score"] > 9]
+        above_9 = day_df[day_df["score"] > 7]
         if above_9.empty:
             gappers = day_df[day_df["gap_pct"] > 0.03]
             if not gappers.empty:
                 st.warning(
-                    f"No tickers scored above 9, but {len(gappers)} had a meaningful opening gap (>3%): "
+                    f"No tickers scored above 7, but {len(gappers)} had a meaningful opening gap (>3%): "
                     f"{', '.join(gappers.head(5)['ticker'].tolist())}. "
                     "These would have been worth investigating in premarket even if the overall score was below threshold."
                 )
             else:
                 st.warning(
-                    "No tickers scored above 9 on this day, and no meaningful opening gaps were detected. "
+                    "No tickers scored above 7 on this day, and no meaningful opening gaps were detected. "
                     "The strategy would have sat this day out — which is the correct call."
                 )
         else:
             st.success(
-                f"{len(above_9)} ticker(s) scored above 9: {', '.join(above_9['ticker'].tolist())}. "
+                f"{len(above_9)} ticker(s) scored above 7: {', '.join(above_9['ticker'].tolist())}. "
                 "Note these scores exclude gap_pct — live scores would be higher for any stock "
                 "that was actually gapping on this day."
             )
