@@ -82,8 +82,8 @@ def build_universe(target_date=None):
             # Without a gap, maximum score from remaining signals is ~10-11,
             # which means stocks with no premarket story stay below threshold.
             score = (
-                3   * gap_pct
-                + 2 * rvol
+                5   * gap_pct
+                + 1.5 * rvol
                 + 2 * breakout_score
                 + 1 * volatility_score
                 + 0.5 * trend_5d
