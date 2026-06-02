@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-SCORE_THRESHOLD = 12
+SCORE_THRESHOLD = 10
 DASHBOARD_URL   = "https://market-universe-generator-7jrhjfbttwfzlappdxaaysq.streamlit.app/"
 
 
