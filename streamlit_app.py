@@ -133,13 +133,23 @@ def fetch_live_scores(tickers):
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
-def traffic_light(score_morning, score_now):
-    if score_now >= score_morning * 0.95:
-        return "🟢", "Still valid"
-    elif score_now >= 7:
-        return "🟡", "Fading"
+def traffic_light(score_morning, live_gap_pct, live_pre_rvol, score_now):
+    """
+    Traffic light based on RAW signals not re-normalised score.
+    Re-normalising across 3-5 tickers gives meaningless comparisons.
+    Instead: gap and RVOL must still be present and positive.
+    """
+    gap_alive  = live_gap_pct  > 0.005   # gap still real (>0.5%)
+    rvol_alive = live_pre_rvol > 0.5     # some premarket volume still there
+
+    if gap_alive and rvol_alive:
+        return "🟢", "Still valid — gap and volume holding"
+    elif gap_alive and not rvol_alive:
+        return "🟡", "Fading — gap holding but volume thinning"
+    elif not gap_alive and rvol_alive:
+        return "🟡", "Fading — volume present but gap gone"
     else:
-        return "🔴", "Gone"
+        return "🔴", "Gone — gap and volume both lost"
 
 
 def get_trading_days(n=14):
@@ -623,6 +633,34 @@ with tab2:
             "rather than waiting for 14:45."
         )
 
+        # ── RSI manual input ─────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("📉 RSI check — enter from your T212 chart")
+        st.caption(
+            "Open each candidate's chart in T212, add the RSI indicator, and type the current value below. "
+            "RSI 50–70 = momentum zone (good). RSI 40–50 = neutral (caution). RSI <40 = oversold (do not buy)."
+        )
+        rsi_inputs = {}
+        rsi_cols = st.columns(len(today_top))
+        for i, (_, row) in enumerate(today_top.iterrows()):
+            ticker = row["ticker"]
+            with rsi_cols[i]:
+                val = st.number_input(
+                    f"{ticker} RSI",
+                    min_value=0.0, max_value=100.0,
+                    value=50.0, step=0.1,
+                    key=f"rsi_{ticker}"
+                )
+                rsi_inputs[ticker] = val
+                if val >= 50:
+                    st.success(f"✅ {val:.1f} — momentum zone")
+                elif val >= 40:
+                    st.warning(f"⚠️ {val:.1f} — neutral, caution")
+                else:
+                    st.error(f"🚫 {val:.1f} — oversold, avoid")
+
+        st.markdown("---")
+
         if st.button("Refresh live data now"):
             tickers_to_check = today_top["ticker"].tolist()
             with st.spinner("Fetching live premarket data..."):
@@ -637,90 +675,101 @@ with tab2:
                 merged = today_top[["ticker", "score", "gap_pct", "premarket_rvol", "breakout_score"]].merge(
                     live_df, on="ticker", how="left"
                 )
-
-                # Live score: normalise live signals relative to each other (cross-sectional),
-                # then apply the same weights as universe.py so the comparison is valid.
-                # With only a handful of tickers here, we use their live values directly
-                # and scale each signal to [0,1] across the small set.
-                def _live_norm(series):
-                    mn, mx = series.min(), series.max()
-                    if mx == mn:
-                        return series * 0.0
-                    return (series - mn) / (mx - mn)
-
-                lg = merged["live_gap_pct"].fillna(0).clip(lower=0)
-                lr = merged["live_pre_rvol"].fillna(0)
-                lb = merged["breakout_score"].fillna(0)
-
-                lg_n = _live_norm(lg)
-                lr_n = _live_norm(lr)
-                lb_n = _live_norm(lb)
-
-                # premarket_momentum = norm_gap (no live premarket_rvol blend needed for a handful of tickers)
-                pm_n = lg_n  # gap dominates momentum signal live
-
-                merged["live_score"] = (
-                    5.0 * pm_n +
-                    3.0 * lg_n +
-                    2.0 * lb_n +
-                    1.0 * lr_n
-                ).round(4)
-
-                merged["score_delta"] = merged["live_score"] - merged["score"]
+                merged["live_gap_pct"]  = merged["live_gap_pct"].fillna(0)
+                merged["live_pre_rvol"] = merged["live_pre_rvol"].fillna(0)
+                merged["score_delta"]   = merged["live_gap_pct"] - merged["gap_pct"]
 
                 st.subheader("Traffic light status")
                 for _, row in merged.iterrows():
-                    light, label = traffic_light(row["score"], row["live_score"])
-                    delta_str = f"+{row['score_delta']:.2f}" if row["score_delta"] >= 0 else f"{row['score_delta']:.2f}"
+                    ticker = row["ticker"]
+                    light, label = traffic_light(
+                        row["score"],
+                        row["live_gap_pct"],
+                        row["live_pre_rvol"],
+                        0,  # score_now unused in new logic
+                    )
+                    rsi_val = rsi_inputs.get(ticker, 50.0)
+                    # Override to RED if RSI is oversold regardless of gap/volume
+                    if rsi_val < 40 and light != "🔴":
+                        light, label = "🔴", "Gone — RSI oversold (<40), momentum exhausted"
+
                     col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 2, 3])
                     col1.markdown(f"## {light}")
-                    col2.metric("Ticker", row["ticker"])
-                    col3.metric("Morning score", f"{row['score']:.2f}")
-                    col4.metric("Live score", f"{row['live_score']:.2f}", delta=delta_str)
-                    col5.markdown(f"**{label}**  \nGap: {row['live_gap_pct']*100:.2f}%  |  Pre-mkt RVOL: {row['live_pre_rvol']:.2f}x")
+                    col2.metric("Ticker", ticker)
+                    col3.metric("Morning gap", f"{row['gap_pct']*100:.2f}%")
+                    col4.metric("Live gap", f"{row['live_gap_pct']*100:.2f}%")
+                    rsi_colour = "🟢" if rsi_val >= 50 else "🟡" if rsi_val >= 40 else "🔴"
+                    col5.markdown(
+                        f"**{label}**  \n"
+                        f"Pre-mkt RVOL: {row['live_pre_rvol']:.2f}x  |  "
+                        f"RSI: {rsi_colour} {rsi_val:.1f}"
+                    )
 
                 st.divider()
 
-                for metric, morning_col, live_col, fmt, title, caption in [
-                    ("Score", "score", "live_score", ".2f",
-                     "📊 Score: morning vs now",
-                     "Blue = the 13:00 scan score. Orange = the live score right now. A falling bar means momentum has faded."),
-                    ("Gap %", "gap_pct", "live_gap_pct", ".2%",
+                # ── Comparison charts — wrapped in try/except to prevent crash ──
+                for morning_col, live_col, y_title, title, caption_text in [
+                    ("gap_pct", "live_gap_pct", "Gap %",
                      "📊 Gap %: morning vs now",
-                     "The gap is the premarket price move vs yesterday's close. If the gap has shrunk significantly since 13:00, enthusiasm is waning."),
-                    ("Premarket RVOL", "premarket_rvol", "live_pre_rvol", ".2f",
+                     "Has the premarket gap held since 13:00? A shrinking gap means enthusiasm is fading."),
+                    ("premarket_rvol", "live_pre_rvol", "Pre-mkt RVOL",
                      "📊 Premarket RVOL: morning vs now",
-                     "Premarket relative volume — is trading activity increasing or decreasing since 13:00? Rising RVOL into the open is a good sign."),
+                     "Is premarket volume building or fading? Rising into the open is bullish."),
                 ]:
                     st.subheader(title)
-                    st.caption(caption)
-                    chart_data = pd.concat([
-                        merged[["ticker", morning_col]].rename(columns={morning_col: "value"}).assign(when="Morning (13:00)"),
-                        merged[["ticker", live_col]].rename(columns={live_col: "value"}).assign(when="Now"),
-                    ])
-                    c = (
-                        alt.Chart(chart_data)
-                        .mark_bar()
-                        .encode(
-                            x=alt.X("ticker:N", title="Ticker"),
-                            y=alt.Y("value:Q", axis=alt.Axis(format=fmt if "%" in fmt else None)),
-                            color=alt.Color("when:N",
-                                scale=alt.Scale(domain=["Morning (13:00)", "Now"], range=["#4a9eff", "#ff7043"]),
-                                legend=alt.Legend(title="When")),
-                            xOffset="when:N",
-                            tooltip=["ticker", "when", alt.Tooltip("value:Q", format=fmt)]
+                    st.caption(caption_text)
+                    try:
+                        chart_data = pd.concat([
+                            merged[["ticker", morning_col]].rename(
+                                columns={morning_col: "value"}
+                            ).assign(when="Morning (13:00)"),
+                            merged[["ticker", live_col]].rename(
+                                columns={live_col: "value"}
+                            ).assign(when="Now"),
+                        ]).reset_index(drop=True)
+                        chart_data["value"] = pd.to_numeric(chart_data["value"], errors="coerce").fillna(0)
+                        c = (
+                            alt.Chart(chart_data)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("ticker:N", title="Ticker"),
+                                y=alt.Y("value:Q", title=y_title),
+                                color=alt.Color(
+                                    "when:N",
+                                    scale=alt.Scale(
+                                        domain=["Morning (13:00)", "Now"],
+                                        range=["#4a9eff", "#ff7043"]
+                                    ),
+                                    legend=alt.Legend(title="When")
+                                ),
+                                xOffset="when:N",
+                                tooltip=["ticker:N", "when:N", alt.Tooltip("value:Q", format=".3f")],
+                            )
                         )
-                    )
-                    st.altair_chart(c, use_container_width=True)
+                        st.altair_chart(c, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"Chart could not render ({title}) — raw data shown instead.")
+                        st.dataframe(
+                            merged[["ticker", morning_col, live_col]],
+                            use_container_width=True
+                        )
 
                 st.divider()
                 st.subheader("Summary")
-                green = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🟢"]
-                amber = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🟡"]
-                red   = [r["ticker"] for _, r in merged.iterrows() if traffic_light(r["score"], r["live_score"])[0] == "🔴"]
-                if green: st.success(f"**Still valid — momentum holding:** {', '.join(green)}")
-                if amber: st.warning(f"**Fading — proceed with caution:** {', '.join(amber)}")
-                if red:   st.error(f"**Gone — momentum lost, skip these today:** {', '.join(red)}")
+                greens, ambers, reds = [], [], []
+                for _, row in merged.iterrows():
+                    ticker = row["ticker"]
+                    rsi_val = rsi_inputs.get(ticker, 50.0)
+                    light, _ = traffic_light(row["score"], row["live_gap_pct"], row["live_pre_rvol"], 0)
+                    if rsi_val < 40:
+                        light = "🔴"
+                    if light == "🟢":   greens.append(ticker)
+                    elif light == "🟡": ambers.append(ticker)
+                    else:               reds.append(ticker)
+
+                if greens: st.success(f"**Still valid — gap and volume holding:** {', '.join(greens)}")
+                if ambers: st.warning(f"**Fading — proceed with caution:** {', '.join(ambers)}")
+                if reds:   st.error(f"**Gone — do not trade these today:** {', '.join(reds)}")
         else:
             st.info("Press the button above around 14:00–14:15 BST to run the pre-trade confirmation check.")
 
