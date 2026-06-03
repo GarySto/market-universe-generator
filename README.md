@@ -1,4 +1,4 @@
-# Market Universe Generator
+# GarAI Momentum Scanner
 
 I am not a developer. I want to be clear about that upfront. I'm a bloke in his early 40s who got curious about momentum trading, decided the best way to learn was to build something, and somehow ended up with a GitHub repository. My daughters remain unimpressed.
 
@@ -8,48 +8,60 @@ This project is a daily stock scanner that identifies momentum candidates on the
 
 ## What it actually does
 
-Every weekday at 13:00 BST, a GitHub Action runs automatically and rebuilds a ranked universe of stocks from a watchlist I maintain in `tickers.txt`. It pulls recent price and volume data via yfinance, computes a momentum score for each ticker, and writes the result to `output/universe.csv`. That CSV feeds a Streamlit dashboard which I (and anyone I share the link with) can open around 13:15–13:30 to see what looks interesting before the NYSE and NASDAQ open at 14:30 BST.
+Every weekday, a GitHub Action runs four times between 08:00–13:00 UTC and rebuilds a ranked universe of stocks from a watchlist in `tickers.txt`. It pulls recent price and volume data via yfinance, computes a composite momentum score for each ticker, and writes the result to `output/universe.csv`. That CSV feeds a Streamlit dashboard which I can open around 13:15–13:30 BST to see what looks interesting before the NYSE and NASDAQ open at 14:30 BST.
 
-No manual intervention needed day to day. Open browser, look at top of list, decide whether to trade. That's the intent.
+No manual intervention needed day to day. Open browser, look at top of list, run the pre-trade check, decide whether to trade. That's the intent.
 
 ---
 
 ## How the scoring works
 
-Each ticker gets scored across five dimensions:
+Each ticker gets scored across six signals, all min-max normalised across the universe before combining so that weights reflect true relative importance:
 
-**Gap %** — how much the premarket price has moved versus yesterday's close. A stock gapping up 5%+ with volume behind it is the core signal I'm looking for.
+**Premarket momentum** — a composite of normalised gap % and normalised premarket RVOL, capturing stocks where both price and volume are building simultaneously before the open. Highest-weighted signal at 5×.
 
-**Relative volume (RVOL)** — yesterday's volume compared to its 10-day average. High RVOL means people are paying attention.
+**Gap %** — how much the premarket price has moved versus yesterday's close. A stock gapping 5%+ with volume is the core signal. Weight: 3×.
 
-**Premarket RVOL** — same thing but for premarket volume specifically. This is the freshest signal.
+**Breakout score** — where yesterday's close sits within the stock's 10-day high/low range. 0 = bottom, 1 = top. Values above 0.7 suggest the stock is pushing toward a breakout. Weight: 2×.
 
-**Breakout score** — where yesterday's close sits within the stock's 10-day high/low range. A score of 1 means it closed at the top of its recent range. A score of 0 means the bottom.
+**RVOL** — yesterday's volume divided by the 10-day average. High RVOL means elevated interest. Weight: 1×.
 
-**Volatility score** — ATR-based. Higher volatility means more room to move, but also more risk. It's in the score because a stock that never moves isn't useful to this strategy even if everything else looks good.
+**Trend (5d)** — how many of the last 5 trading days closed higher than the previous close. Confirmation signal. Weight: 1×.
 
-There is also a sixth composite signal:
+**Volatility score** — ATR-based. Ensures stocks with no intraday range aren't prioritised. Weight: 0.5×.
 
-**Premarket momentum** — a combination of gap % and premarket RVOL, both normalised, that captures stocks where price and volume are building together before the open. This is the highest-weighted signal.
-
-Before scoring, all signals are min-max normalised to a 0–1 scale across the full universe of tickers scanned that day. This matters: it means the weights actually control relative importance, rather than being dominated by whichever signal happens to have the largest raw numbers. Previously, RVOL (an unbounded ratio) was swamping gap % (a small fraction) despite the weights suggesting otherwise.
-
-The final score:
+The final formula:
 
 ```
-score = 5 × premarket_momentum  (normalised gap + premarket RVOL)
-      + 3 × norm_gap            (gap % normalised)
-      + 2 × norm_breakout       (breakout score normalised)
-      + 1 × norm_rvol           (RVOL normalised)
-      + 1 × norm_trend          (trend_5d / 5)
-      + 0.5 × norm_volatility   (volatility score normalised)
+score = 5 × premarket_momentum
+      + 3 × norm_gap
+      + 2 × norm_breakout
+      + 1 × norm_rvol
+      + 1 × norm_trend
+      + 0.5 × norm_volatility
 ```
 
-Maximum possible score: ~12.5. The dashboard flags tickers above 7 as worth investigating.
+Maximum possible score: ~12.5. The dashboard flags tickers above 7 with a real premarket gap as Trade Today candidates.
 
-Long-only rules are enforced at the scoring stage: any ticker with a negative premarket gap receives a score of 0 and is excluded from Trade Today entirely. This prevents high-RVOL down-gappers from appearing as false positives.
+**Long-only rule:** any ticker with a negative premarket gap receives a score of 0 and is excluded from Trade Today entirely.
 
-The top of the list each morning is where I start looking. Whether I actually trade any of them is still a human decision — this tool narrows the field, it doesn't make the call for me.
+**Price filter:** tickers below $1.50 or above $75 are excluded. Below $1.50 the spreads in premarket are too wide. Above $75 a 10% move in 15 minutes is rare without a major catalyst.
+
+---
+
+## Live trading record
+
+As of 3 June 2026, three game trades and two side trades have been completed.
+
+| Date | Ticker | Return | Score | Pre-trade | Lesson |
+|------|--------|--------|-------|-----------|--------|
+| 01 Jun | SPCE | +1.2% | 12.75 | 🟢 Green | Target touched but limit order didn't fill OTC — sell manually |
+| 02 Jun | NAMM | +4.95% | 14.37 | 🟢 Green | Overrode system on hunch — partial rather than win |
+| 03 Jun | BB | -8.49% | 10.09 | 🔴 Red | Early entry (12:44 vs 13:30 window). RED pre-trade ignored |
+| 03 Jun | MRVL | -8.97% | 11.78 | 🔴 Red | Same pattern. RSI 34 at entry — oversold |
+| 03 Jun | GME | TBC | 7.39 | 🔴 Red | Entered at 12:52 — before window. Live score 0.00 |
+
+**The pattern so far:** every loss shares the same root cause — entry before 13:30 BST. The scanner correctly identified the stocks. The pre-trade check correctly flagged RED. The human entered early. RSI below 40 at entry time has correlated with every loss.
 
 ---
 
@@ -59,13 +71,15 @@ The top of the list each morning is where I start looking. Whether I actually tr
 market-universe-generator/
 ├── .github/
 │   └── workflows/
-│       └── daily.yml        # GitHub Actions — runs Mon–Fri at 12:00 UTC (13:00 BST)
+│       └── daily.yml           # GitHub Actions — runs Mon–Fri at 08:00, 11:00, 12:00, 13:00 UTC
 ├── output/
-│   └── universe.csv         # Generated daily — don't edit this manually
-├── universe.py              # The scoring engine
-├── streamlit_app.py         # The dashboard
-├── tickers.txt              # Watchlist — one ticker per line
-└── requirements.txt         # Python dependencies
+│   └── universe.csv            # Generated daily — don't edit manually
+├── universe.py                 # The scoring engine
+├── streamlit_app.py            # The dashboard
+├── send_alert.py               # Email alert script
+├── tickers.txt                 # Watchlist — one ticker per line (~340 tickers)
+├── trades.csv                  # Live trade log — feeds the My Trades tab
+└── requirements.txt            # Python dependencies
 ```
 
 ---
@@ -73,7 +87,7 @@ market-universe-generator/
 ## Running it yourself
 
 **The dashboard (public):**
-The live dashboard is hosted on Streamlit Cloud. It reads the latest `output/universe.csv` directly from this repo. If the GitHub Action has run that morning, the data will be fresh.
+The live dashboard is hosted on Streamlit Cloud and reads the latest `output/universe.csv` directly from this repo.
 
 **Locally:**
 ```bash
@@ -88,61 +102,53 @@ python -m streamlit run streamlit_app.py
 python universe.py
 ```
 
-This generates a fresh `output/universe.csv` based on current data. Useful if you want to test outside of the scheduled run.
-
 ---
 
 ## Reading the dashboard
 
-The dashboard has four tabs: Scanner, Trade Today, Backtest, and My Trades.
+The dashboard has four tabs.
 
-**Top 10 Momentum Tickers** — sorted by score descending. These are the first names worth looking at each morning.
+**Scanner** — the full ranked universe from today's scan. Gap % vs RVOL scatter shows where the interesting stocks are (top-right = gapping up with high volume). A time-sensitive banner tells you exactly what to do at each hour of the day: when to just look, when to check, when to act, when the window has closed.
 
-**Gap % vs RVOL scatter** — top-right of this chart is where you want to be. High gap and high relative volume together is a much stronger signal than either on its own.
+**Trade Today** — filtered to tickers scoring above 7 with a real positive premarket gap. Run the pre-trade confirmation check here at 14:00–14:15 BST:
 
-**Breakout score chart** — tickers near 1.0 are trading near the top of their recent range, which can mean momentum continuation or exhaustion depending on the broader context.
+- Enter the RSI from your broker's chart for each candidate (want 50–70; below 40 = avoid)
+- Press Refresh to fetch live premarket data
+- Traffic lights show 🟢 (gap and volume holding), 🟡 (one signal fading), or 🔴 (momentum gone)
+- Only trade 🟢. No exceptions.
 
-**Full universe table** — sortable. Useful if you want to filter or look beyond the top 10.
+**Backtest** — re-scores the last 14 trading days using only data that would have been available at the time. Pick a day and a ticker to see the 1-minute candle chart from 12:00–15:00 BST with the simulated trade: entry at 13:30, +10% target line, market open at 14:30, hard exit at 14:45.
 
-**Trade Today tab** — filters the morning scan to tickers scoring above 7 with a real positive premarket gap. Also includes a pre-trade confirmation check (run around 14:00–14:15 BST) that refetches live premarket data and gives a 🟢🟡🔴 traffic light for each candidate.
-
-**Backtest tab** — re-scores each of the last 14 trading days using only data that would have been available at the time. Uses the same normalised scoring as the live scanner. Pick a day and a ticker to see the 1-minute candle chart and simulate the +10% / 14:45 BST exit strategy.
-
-**My Trades tab** — tracks every real trade made using the scanner. Reads from `trades.csv` in the repo. Shows running bank, win rate, return distribution, and a scatter of score vs actual return.
-
-One thing worth knowing: the `gap_pct` and `premarket_rvol` columns will show as zero outside of premarket hours. The Action runs at 13:00 BST specifically to catch live premarket data, so if you're looking at the dashboard at 9pm, those numbers won't mean much.
+**My Trades** — tracks every real trade against the morning scanner scores. The scatter of score vs actual return is the key chart — over time it will validate or challenge the scoring weights.
 
 ---
 
-## Trading strategy
+## Daily routine
 
-The current approach:
-
-- Review the top candidates on the dashboard around 13:15–13:30 BST
-- Look for tickers with a score above 7, gap_pct above ~0.05, premarket_rvol building, trend_5d of 4 or 5, and a strong breakout score
-- Buy in premarket or at market open (14:30 BST)
-- Target: +10% from entry
-- Exit: take the profit, or cut at 15 minutes after open if target hasn't been hit
-
-Starting capital: £50. Target: not having to do this 98 times perfectly.
-
-Slippage and fees aren't yet modelled in the backtest. That's on the list.
+| Time (BST) | Action |
+|------------|--------|
+| 13:00 | Dashboard updates. Review top candidates. Check gap_pct and premarket_rvol are populated. |
+| 13:15–13:30 | Compare candidates. Check RSI on T212 charts (want 50–70). Look for gap >5%, premarket_rvol building, trend 4-5, breakout >0.7. |
+| 14:00–14:15 | Run pre-trade check. Enter RSI. Click Refresh. 🟢 = proceed. 🟡 = caution. 🔴 = skip. |
+| 13:30–14:15 | Entry window. Buy in premarket via Trading 212 OTC. NOT before 13:30. NOT after 14:15. |
+| At +10% | Sell manually — do not rely on OTC limit orders. |
+| 14:45 | Hard exit. Close all positions regardless of P&L. No exceptions. |
 
 ---
 
-## What's coming
+## What's next
 
-The backtesting module is live and working — it re-scores the last 14 trading days with the same normalised formula as the live scanner, and shows 1-minute candle replays with the simulated +10% / 14:45 BST trade. Slippage and fees aren't yet modelled. That's on the list.
+**Phase 4 — continuation strategy:** some stocks keep running past 14:45. The plan is a GitHub Action polling every 15-30 minutes during market hours and sending an alert if a morning pick is still showing strength. This is a nudge signal, not a real-time execution signal — GitHub Actions scheduling lag prevents that.
 
-The My Trades tab is also live and tracks real trades against the scanner's morning scores — the scatter of score vs actual return will be the key chart for validating (or challenging) the model over time.
+**Phase 5 — automated execution:** parked until Phase 4 is built and the strategy has a meaningful trade history. Alpaca Markets paper trading API is the planned starting point.
 
-Next priorities: alerts (probably email), expanding the trade log to capture enough data to run proper weight optimisation, and possibly adding float and catalyst filters as separate pre-filters rather than blending them into the score.
+**Near-term:** accumulate 20-30 trades with full signal data (RSI, MACD, EMA) to validate whether the scoring weights reflect what actually predicts a winning trade.
 
 ---
 
 ## Tech stack
 
-Python 3.10, yfinance, pandas, numpy, Streamlit, GitHub Actions. Nothing exotic. The automation runs on GitHub's free tier, the dashboard is hosted on Streamlit Cloud's free tier. Total infrastructure cost: £0. Total time invested: more than I'd like to admit.
+Python 3.10, yfinance, pandas, numpy, Streamlit, Altair, GitHub Actions, Outlook SMTP. Nothing exotic. Automation runs on GitHub's free tier, dashboard on Streamlit Cloud's free tier. Total infrastructure cost: £0. Total time invested: more than I'd like to admit.
 
 ---
 
