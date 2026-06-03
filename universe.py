@@ -46,7 +46,10 @@ def build_universe(target_date=None):
             yesterday_close = float(hist["Close"].iloc[-1])
             yesterday_volume = float(hist["Volume"].iloc[-1])
 
-            if yesterday_close < 1.0:
+            # Gap-and-go filter: stocks below $1 have wild spreads in premarket.
+            # Stocks above $100 rarely move 10% in 15 minutes on retail momentum.
+            # Sweet spot for this strategy: $1.50–$75.
+            if yesterday_close < 1.50 or yesterday_close > 75.0:
                 continue
 
             last_10 = hist.tail(10)
@@ -55,6 +58,10 @@ def build_universe(target_date=None):
             low_10d = float(last_10["Low"].min())
             atr_10d = float((last_10["High"] - last_10["Low"]).mean())
             trend_5d = int((hist["Close"].diff() > 0).tail(5).sum())
+
+            # Minimum average volume filter: need enough liquidity for OTC fills
+            if avg_volume_10d < 200_000:
+                continue
 
             premarket_price = None
             premarket_volume = 0
@@ -82,6 +89,7 @@ def build_universe(target_date=None):
             records.append({
                 "ticker": t,
                 "premarket_price": round(premarket_price, 2),
+                "yesterday_close": round(yesterday_close, 2),
                 "premarket_volume": int(premarket_volume),
                 "gap_pct": float(gap_pct),
                 "rvol": float(rvol),
@@ -101,26 +109,26 @@ def build_universe(target_date=None):
 
     df = pd.DataFrame(records)
 
-    # Normalization
-    gap_min, gap_max = _safe_min_max(df["gap_pct"])
-    rvol_min, rvol_max = _safe_min_max(df["rvol"])
+    # ── Normalisation (min-max across today's universe) ──────────────────────
+    gap_min, gap_max         = _safe_min_max(df["gap_pct"])
+    rvol_min, rvol_max       = _safe_min_max(df["rvol"])
     pre_rvol_min, pre_rvol_max = _safe_min_max(df["premarket_rvol"])
-    brk_min, brk_max = _safe_min_max(df["breakout_score"])
-    vol_min, vol_max = _safe_min_max(df["volatility_score"])
+    brk_min, brk_max         = _safe_min_max(df["breakout_score"])
+    vol_min, vol_max         = _safe_min_max(df["volatility_score"])
 
-    df["norm_gap"] = _normalize(df["gap_pct"], gap_min, gap_max)
-    df["norm_rvol"] = _normalize(df["rvol"], rvol_min, rvol_max)
-    df["norm_pre_rvol"] = _normalize(df["premarket_rvol"], pre_rvol_min, pre_rvol_max)
-    df["norm_breakout"] = _normalize(df["breakout_score"], brk_min, brk_max)
-    df["norm_volatility"] = _normalize(df["volatility_score"], vol_min, vol_max)
-    df["norm_trend"] = df["trend_5d"] / 5.0
+    df["norm_gap"]        = _normalize(df["gap_pct"],          gap_min,     gap_max)
+    df["norm_rvol"]       = _normalize(df["rvol"],             rvol_min,    rvol_max)
+    df["norm_pre_rvol"]   = _normalize(df["premarket_rvol"],   pre_rvol_min, pre_rvol_max)
+    df["norm_breakout"]   = _normalize(df["breakout_score"],   brk_min,     brk_max)
+    df["norm_volatility"] = _normalize(df["volatility_score"], vol_min,     vol_max)
+    df["norm_trend"]      = df["trend_5d"] / 5.0
 
-    # Premarket momentum (normalized)
+    # Premarket momentum: gap + premarket RVOL, both normalised
     pm_raw = df["norm_gap"].clip(lower=0) + df["norm_pre_rvol"].clip(lower=0)
     pm_min, pm_max = _safe_min_max(pm_raw)
     df["premarket_momentum"] = _normalize(pm_raw, pm_min, pm_max)
 
-    # Scoring (Option A)
+    # ── Scoring ───────────────────────────────────────────────────────────────
     base_score = (
         5.0 * df["premarket_momentum"] +
         3.0 * df["norm_gap"] +
@@ -133,10 +141,13 @@ def build_universe(target_date=None):
     score = base_score.copy()
 
     # Long-only rules
-    score[df["gap_pct"] < 0] = 0.0
+    score[df["gap_pct"] < 0]  = 0.0
     score[df["gap_pct"] == 0] = score[df["gap_pct"] == 0].clip(upper=9.0)
 
     df["score"] = score.round(4)
+
+    # Add scan timestamp so dashboard can show which run populated the data
+    df["scan_time_utc"] = datetime.utcnow().strftime("%H:%M")
 
     df = df.sort_values("score", ascending=False).reset_index(drop=True)
     return df
