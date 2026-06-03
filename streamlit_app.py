@@ -1211,7 +1211,9 @@ with tab4:
 
         st.subheader("Performance at a glance")
         k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Current bank", f"£{current_bank:.2f}", f"{'+' if total_pnl >= 0 else ''}£{total_pnl:.2f}")
+        bank_delta = f"{'+' if total_pnl >= 0 else ''}£{total_pnl:.2f}"
+        k1.metric("Current bank", f"£{current_bank:.2f}", bank_delta,
+                  delta_color="normal" if total_pnl >= 0 else "inverse")
         k2.metric("Total trades", total_trades, f"{trades_to_go} to go")
         k3.metric("Win rate", f"{win_rate*100:.0f}%", f"{wins}W / {losses}L")
         k4.metric("Avg return", f"{avg_return:.1f}%")
@@ -1260,6 +1262,7 @@ with tab4:
             else:
                 trades["label"] = [f"Trade {i+1}" for i in range(len(trades))]
 
+            trades["trade_num"] = range(1, len(trades) + 1)
             trades["bar_color"] = trades["return_pct"].apply(
                 lambda x: "Win" if x >= 10 else ("Partial" if x > 0 else "Loss")
             )
@@ -1267,7 +1270,8 @@ with tab4:
                 alt.Chart(trades)
                 .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
                 .encode(
-                    x=alt.X("label:N", title="Trade", axis=alt.Axis(labelAngle=-45)),
+                    x=alt.X("trade_num:O", title="Trade", axis=alt.Axis(labelAngle=-45,
+                            labelExpr="datum.label")),
                     y=alt.Y("return_pct:Q", title="Return (%)"),
                     color=alt.Color("bar_color:N",
                         scale=alt.Scale(domain=["Win","Partial","Loss"],
@@ -1288,7 +1292,6 @@ with tab4:
         st.subheader("📈 Running bank — the line that matters")
         st.caption("Starting from £50. Every trade adds or subtracts. This needs to keep going up and to the right.")
 
-        trades["trade_num"] = range(1, len(trades)+1)
         bank_line = (
             alt.Chart(trades)
             .mark_line(point=True, color="#2E5FA3", strokeWidth=2)
