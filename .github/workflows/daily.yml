@@ -2,15 +2,15 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — early scan, gap data may be sparse
-    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — main scan, premarket data reliable
+    - cron: "0 8 * * 1-5"    # 08:00 UTC = 09:00 BST — early premarket pulse
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — gap data building
+    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — main scan, premarket reliable
     - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final check before open
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -29,9 +29,9 @@ jobs:
       - name: Send alert email (if strong candidates found)
         continue-on-error: true
         env:
-          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
-          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
-          ALERT_EMAILS:   ${{ secrets.ALERT_EMAILS }}
+          OUTLOOK_USER:     ${{ secrets.OUTLOOK_USER }}
+          OUTLOOK_PASSWORD: ${{ secrets.OUTLOOK_PASSWORD }}
+          ALERT_EMAILS:     ${{ secrets.ALERT_EMAILS }}
         run: python send_alert.py
 
       - name: Commit results
@@ -39,5 +39,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add output/universe.csv
-          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily universe update"
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily universe update [$(date -u '+%H:%M UTC')]"
           git push
