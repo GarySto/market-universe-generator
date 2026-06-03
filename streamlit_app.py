@@ -409,11 +409,11 @@ tab1, tab2, tab3, tab4 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trad
 with tab1:
 
     st.markdown(
-   "This tab shows today's full ranked universe of stocks — updated automatically at "
-#   "09:00, 12:00, 13:00 and 14:00 BST each weekday. The 13:00 scan carries the most reliable "
-#   "premarket data. The top of the list is where to look first. "
-#   "Anything scoring above 7 with a meaningful gap and high RVOL is worth investigating further. "
-#   "Gap % and premarket RVOL show as 0 outside of premarket hours — this is expected."
+        "This tab shows today's full ranked universe of stocks — updated automatically at "
+        "09:00, 12:00, 13:00 and 14:00 BST each weekday. The 13:00 scan carries the most reliable "
+        "premarket data. The top of the list is where to look first. "
+        "Anything scoring above 7 with a meaningful gap and high RVOL is worth investigating further. "
+        "Gap % and premarket RVOL show as 0 outside of premarket hours — this is expected."
     )
     show_glossary()
     st.divider()
@@ -526,27 +526,26 @@ with tab1:
 with tab2:
 
     st.header("🚀 Trade Today")
-   st.markdown(
-    "This tab shows your top candidates from today's scan — stocks scoring above 7 with a "
-    "real premarket gap. Read the rules below **before doing anything else**."
-)
- 
-st.error(
-    """
-    ### ⛔ Strategy Rules — Read Every Day
- 
-    | Rule | Detail |
-    |---|---|
-    | **Do NOT buy before 13:30 BST** | Early entries miss the pre-trade check and are higher risk |
-    | **Entry window** | **13:30 – 14:15 BST** only (premarket OTC via Trading 212) |
-    | **Run pre-trade check first** | Press the refresh button below at **14:00–14:15 BST** |
-    | **Only trade 🟢 Green** | Skip anything 🟡 Amber or 🔴 Red — momentum has faded |
-    | **Target** | +10% from your entry price |
-    | **Hard exit** | **14:45 BST — close the position regardless of P&L** |
-    | **No holding past 14:45** | This is a 15-minute momentum strategy, not a day trade |
-    | **No gap data = no trade** | If gap_pct shows 0 for everything, the data isn't live yet |
-    """
-)
+    st.markdown(
+        "This tab shows your top candidates from today's scan — stocks scoring above 7 with a "
+        "real premarket gap. Read the rules below **before doing anything else**."
+    )
+    st.error(
+        """
+### ⛔ Strategy Rules — Read Every Day
+
+| Rule | Detail |
+|---|---|
+| **Do NOT buy before 13:30 BST** | Early entries miss the pre-trade check and are higher risk |
+| **Entry window** | **13:30 – 14:15 BST** only (premarket OTC via Trading 212) |
+| **Run pre-trade check first** | Press the refresh button below at **14:00–14:15 BST** |
+| **Only trade 🟢 Green** | Skip anything 🟡 Amber or 🔴 Red — momentum has faded |
+| **Target** | +10% from your entry price |
+| **Hard exit** | **14:45 BST — close the position regardless of P&L** |
+| **No holding past 14:45** | This is a 15-minute momentum strategy, not a day trade |
+| **No gap data = no trade** | If gap_pct shows 0 for everything, the data isn't live yet |
+        """
+    )
     show_glossary()
     st.divider()
 
@@ -587,12 +586,12 @@ st.error(
         display_cols = ["ticker", "score", "gap_pct", "premarket_rvol",
                         "rvol", "trend_5d", "breakout_score", "volatility_score"]
         st.dataframe(today_top[display_cols], use_container_width=True)
-       st.error(
-    "🕐 **Entry window: 13:30–14:15 BST** · "
-    "Market opens: **14:30 BST** · "
-    "Target: **+10%** · "
-    "Hard exit: **14:45 BST — NO EXCEPTIONS**"
-)
+        st.error(
+            "🕐 **Entry window: 13:30–14:15 BST** · "
+            "Market opens: **14:30 BST** · "
+            "Target: **+10%** · "
+            "Hard exit: **14:45 BST — NO EXCEPTIONS**"
+        )
 
         st.subheader("📊 Morning score comparison")
         st.caption("Colour goes from red (lower score) to green (higher score). Only stocks above 7 shown.")
@@ -612,17 +611,17 @@ st.error(
         st.divider()
         st.subheader("🔄 Pre-trade confirmation — is momentum still in play?")
         st.markdown(
-    "**Run this at 14:00–14:15 BST** — 15 to 30 minutes before market open. "
-    "This fetches fresh premarket data and compares it to the 13:00 scan. "
-    "Traffic light meanings:"
-)
-st.markdown(
-    "🟢 **Green — Still valid.** Score held or improved. Momentum intact. OK to trade.  \n"
-    "🟡 **Amber — Fading.** Score dropped but above 7. Trade with caution — reduce size.  \n"
-    "🔴 **Red — Gone.** Momentum lost. **Do not trade this ticker today.** No exceptions.  \n\n"
-    "If your pre-trade check shows 🔴 Red and you already entered — consider exiting early "
-    "rather than waiting for 14:45."
-)
+            "**Run this at 14:00–14:15 BST** — 15 to 30 minutes before market open. "
+            "This fetches fresh premarket data and compares it to the 13:00 scan. "
+            "Traffic light meanings:"
+        )
+        st.markdown(
+            "🟢 **Green — Still valid.** Score held or improved. Momentum intact. OK to trade.  \n"
+            "🟡 **Amber — Fading.** Score dropped but above 7. Trade with caution — reduce size.  \n"
+            "🔴 **Red — Gone.** Momentum lost. **Do not trade this ticker today.** No exceptions.  \n\n"
+            "If your pre-trade check shows 🔴 Red and you already entered — consider exiting early "
+            "rather than waiting for 14:45."
+        )
 
         if st.button("Refresh live data now"):
             tickers_to_check = today_top["ticker"].tolist()
