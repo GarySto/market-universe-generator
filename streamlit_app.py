@@ -7,6 +7,57 @@ from datetime import datetime, date, timedelta, timezone
 
 st.set_page_config(page_title="Momentum Scanner", layout="wide")
 
+import pytz as _pytz
+_BST = _pytz.timezone("Europe/London")
+_now_bst = datetime.now(_pytz.utc).astimezone(_BST)
+_hour_bst = _now_bst.hour
+ 
+# Time-sensitive context banner
+if 8 <= _hour_bst < 9:
+    st.warning(
+        "⏰ **09:00 BST early scan** — Premarket has just opened. "
+        "Volume is thin and gaps can be misleading at this stage. "
+        "Use this data for **awareness only** — do not place any orders yet. "
+        "The strategy entry window is **13:30–14:15 BST**."
+    )
+elif 9 <= _hour_bst < 12:
+    st.info(
+        "📡 **Premarket building** — Gaps and volume are developing but not yet reliable. "
+        "Check back at 13:00 BST for the main scan. "
+        "**No orders before 13:30 BST.**"
+    )
+elif 12 <= _hour_bst < 13:
+    st.info(
+        "🔍 **12:00 BST scan** — Premarket data is live. "
+        "This is an early read — confirm again at 13:00 and run the pre-trade check at 14:00. "
+        "**Entry window: 13:30–14:15 BST only.**"
+    )
+elif _hour_bst == 13:
+    st.success(
+        "✅ **13:00 BST — Primary scan live.** "
+        "This is the main morning scan. Review top candidates now, "
+        "then run the **pre-trade confirmation check at 14:00–14:15 BST** before placing any order. "
+        "**Entry window: 13:30–14:15 BST. Hard exit: 14:45 BST.**"
+    )
+elif _hour_bst == 14:
+    st.error(
+        "🚨 **14:00 BST — FINAL CHECK WINDOW.** "
+        "Market opens in 30 minutes. Run the pre-trade check NOW. "
+        "Only trade tickers showing 🟢 Green — skip anything 🟡 Amber or 🔴 Red. "
+        "**Entry: 13:30–14:15 BST. Hard exit: 14:45 BST — NO EXCEPTIONS.**"
+    )
+elif _hour_bst == 15 or (_hour_bst == 14 and _now_bst.minute >= 30):
+    st.error(
+        "⛔ **Market is open.** Entry window has closed (was 13:30–14:15 BST). "
+        "If you have an open position, your hard exit is **14:45 BST**. "
+        "Do not enter new positions now."
+    )
+elif _hour_bst >= 15:
+    st.info(
+        "🔒 **Trading day closed.** No action required. "
+        "The next scan runs at 09:00 BST tomorrow (Mon–Fri)."
+    )
+ 
 # ============================================================
 # GLOSSARY (shared across tabs via expander)
 # ============================================================
@@ -330,8 +381,23 @@ def simulate_trade(candles, target_pct=0.10):
 
 df = load_universe()
 
+
 st.title("📈 Momentum Scanner Dashboard")
-st.caption("Automatically generated daily from your GitHub Actions pipeline")
+ 
+# Show when the data was last generated (uses scan_time_utc column added to universe.py)
+try:
+    _scan_time = df["scan_time_utc"].iloc[0] if "scan_time_utc" in df.columns else None
+    if _scan_time:
+        st.caption(
+            f"Data last updated: **{_scan_time} UTC** today · "
+            "Scans run at 08:00, 11:00, 12:00, 13:00 UTC (Mon–Fri) · "
+            "Dashboard updates within ~5 minutes of each scan."
+        )
+    else:
+        st.caption("Automatically generated daily from your GitHub Actions pipeline")
+except Exception:
+    st.caption("Automatically generated daily from your GitHub Actions pipeline")
+ 
 
 tab1, tab2, tab3, tab4 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trades"])
 
@@ -343,9 +409,11 @@ tab1, tab2, tab3, tab4 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trad
 with tab1:
 
     st.markdown(
-        "This tab shows today's full ranked universe of stocks — built each morning at 13:00 BST "
-        "by the automated pipeline. The top of the list is where to look first. "
-        "Anything scoring above 7 with a meaningful gap and high RVOL is worth investigating further."
+   "This tab shows today's full ranked universe of stocks — updated automatically at "
+#   "09:00, 12:00, 13:00 and 14:00 BST each weekday. The 13:00 scan carries the most reliable "
+#   "premarket data. The top of the list is where to look first. "
+#   "Anything scoring above 7 with a meaningful gap and high RVOL is worth investigating further. "
+#   "Gap % and premarket RVOL show as 0 outside of premarket hours — this is expected."
     )
     show_glossary()
     st.divider()
@@ -458,13 +526,27 @@ with tab1:
 with tab2:
 
     st.header("🚀 Trade Today")
-    st.markdown(
-        "This tab filters the morning scan down to your top candidates — stocks scoring above 7 "
-        "with strong momentum signals. The strategy is to buy in premarket between 13:00 and 14:15 BST, "
-        "target a **+10% return**, and exit no later than **14:45 BST** (15 minutes after market open) "
-        "regardless of outcome. The pre-trade confirmation check below lets you verify momentum is still "
-        "in play before committing."
-    )
+   st.markdown(
+    "This tab shows your top candidates from today's scan — stocks scoring above 7 with a "
+    "real premarket gap. Read the rules below **before doing anything else**."
+)
+ 
+st.error(
+    """
+    ### ⛔ Strategy Rules — Read Every Day
+ 
+    | Rule | Detail |
+    |---|---|
+    | **Do NOT buy before 13:30 BST** | Early entries miss the pre-trade check and are higher risk |
+    | **Entry window** | **13:30 – 14:15 BST** only (premarket OTC via Trading 212) |
+    | **Run pre-trade check first** | Press the refresh button below at **14:00–14:15 BST** |
+    | **Only trade 🟢 Green** | Skip anything 🟡 Amber or 🔴 Red — momentum has faded |
+    | **Target** | +10% from your entry price |
+    | **Hard exit** | **14:45 BST — close the position regardless of P&L** |
+    | **No holding past 14:45** | This is a 15-minute momentum strategy, not a day trade |
+    | **No gap data = no trade** | If gap_pct shows 0 for everything, the data isn't live yet |
+    """
+)
     show_glossary()
     st.divider()
 
@@ -505,11 +587,12 @@ with tab2:
         display_cols = ["ticker", "score", "gap_pct", "premarket_rvol",
                         "rvol", "trend_5d", "breakout_score", "volatility_score"]
         st.dataframe(today_top[display_cols], use_container_width=True)
-        st.info(
-            "**Suggested entry window: 13:30–14:15 BST** — during the premarket session. "
-            "The market opens at 14:30 BST. "
-            "Exit target: +10% from your entry price, or close the position by 14:45 BST."
-        )
+       st.error(
+    "🕐 **Entry window: 13:30–14:15 BST** · "
+    "Market opens: **14:30 BST** · "
+    "Target: **+10%** · "
+    "Hard exit: **14:45 BST — NO EXCEPTIONS**"
+)
 
         st.subheader("📊 Morning score comparison")
         st.caption("Colour goes from red (lower score) to green (higher score). Only stocks above 7 shown.")
@@ -529,15 +612,17 @@ with tab2:
         st.divider()
         st.subheader("🔄 Pre-trade confirmation — is momentum still in play?")
         st.markdown(
-            "Run this around **14:00–14:15 BST**, about 15–30 minutes before the market opens. "
-            "It fetches the latest available premarket data for your top candidates and compares it "
-            "to the 13:00 scan. The traffic lights tell you whether each stock's momentum has held, "
-            "faded, or gone entirely. "
-            "\n\n"
-            "🟢 **Still valid** — score has held or improved. Momentum is intact.  \n"
-            "🟡 **Fading** — score has dropped but is still above 7. Proceed with caution.  \n"
-            "🔴 **Gone** — score has dropped significantly. Skip this one today."
-        )
+    "**Run this at 14:00–14:15 BST** — 15 to 30 minutes before market open. "
+    "This fetches fresh premarket data and compares it to the 13:00 scan. "
+    "Traffic light meanings:"
+)
+st.markdown(
+    "🟢 **Green — Still valid.** Score held or improved. Momentum intact. OK to trade.  \n"
+    "🟡 **Amber — Fading.** Score dropped but above 7. Trade with caution — reduce size.  \n"
+    "🔴 **Red — Gone.** Momentum lost. **Do not trade this ticker today.** No exceptions.  \n\n"
+    "If your pre-trade check shows 🔴 Red and you already entered — consider exiting early "
+    "rather than waiting for 14:45."
+)
 
         if st.button("Refresh live data now"):
             tickers_to_check = today_top["ticker"].tolist()
