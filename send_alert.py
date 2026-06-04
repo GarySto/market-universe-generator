@@ -1,10 +1,12 @@
 """
 send_alert.py — runs after universe.py in the GitHub Action.
 
-Three scheduled runs daily (Mon-Fri):
-  12:00 BST (11:00 UTC) — morning scan: alert if score > 12 AND gap > 0
-  13:00 BST (12:00 UTC) — mid-morning check: alert if score still > 12
-  14:00 BST (13:00 UTC) — final check: alert if score still > 12 before open
+Four scheduled runs daily (Mon-Fri) — times shifted 2hrs earlier to buffer
+GitHub Actions scheduling delays:
+  07:00 BST (06:00 UTC) — early pulse:        alert if score > 10 AND gap > 0
+  10:00 BST (09:00 UTC) — morning scan:        alert if score > 10 AND gap > 0
+  11:00 BST (10:00 UTC) — mid-morning check:   alert if score > 10
+  12:00 BST (11:00 UTC) — final check:         alert if score > 10 (last call before entry)
 
 Each run compares against the previous CSV to detect if momentum is
 holding, improving, or fading. Subject line and body reflect which
@@ -30,18 +32,22 @@ DASHBOARD_URL   = "https://market-universe-generator-7jrhjfbttwfzlappdxaaysq.str
 
 def get_run_context():
     """
-    Work out which of the three daily runs this is based on UTC hour.
-    Returns (run_name, bst_time, is_morning_scan)
+    Work out which of the four daily runs this is based on UTC hour.
+    Schedule shifted 2hrs earlier vs original to buffer GitHub Actions delays.
+    Returns (run_name, bst_time, is_early_run)
+    is_early_run = True for the first two runs where gap confirmation matters most.
     """
     utc_hour = datetime.now(timezone.utc).hour
-    if utc_hour == 11:
-        return "Morning scan", "12:00 BST", True
-    elif utc_hour == 12:
-        return "Mid-morning check", "13:00 BST", False
-    elif utc_hour == 13:
-        return "Final check before open", "14:00 BST", False
+    if utc_hour == 6:
+        return "Early pulse", "07:00 BST", True
+    elif utc_hour == 9:
+        return "Morning scan", "10:00 BST", True
+    elif utc_hour == 10:
+        return "Mid-morning check", "11:00 BST", False
+    elif utc_hour == 11:
+        return "Final check before entry", "12:00 BST", False
     else:
-        # Manual trigger — treat as morning scan
+        # Manual trigger or delayed run
         return "Manual scan", "Now", True
 
 
@@ -59,12 +65,12 @@ def load_universe():
     return df
 
 
-def get_candidates(df, is_morning_scan):
+def get_candidates(df, is_early_run):
     """
-    Morning scan: require gap_pct > 0 (real premarket gap) AND score > 12
-    Later checks: score > 12 is enough — gap may have shifted slightly
+    Early runs: require gap_pct > 0 (real premarket gap) AND score > threshold.
+    Later checks: score > threshold is enough — gap may have shifted slightly.
     """
-    if is_morning_scan:
+    if is_early_run:
         return df[
             (df["score"] > SCORE_THRESHOLD) &
             (df["gap_pct"] > 0)
@@ -82,33 +88,49 @@ def build_subject(candidates, run_name, bst_time):
     )
 
 
-def build_email(candidates, run_name, bst_time, is_morning_scan):
+def build_email(candidates, run_name, bst_time, is_early_run):
     today = datetime.now(timezone.utc).strftime("%A %-d %B %Y")
     count = len(candidates)
 
-    # Context message per run
-    if is_morning_scan:
+    # Context message per run — all times updated to new schedule
+    if run_name == "Early pulse":
         context_msg = (
-            "This is the <strong>morning scan at 12:00 BST</strong>. "
+            "This is the <strong>early pulse at 07:00 BST</strong>. "
+            "Premarket has just opened — volume is thin and gaps can shift significantly. "
+            "Use this as awareness only. The morning scan runs at 10:00 BST with more reliable data. "
+            "Do not place any orders yet."
+        )
+        action_msg = "Awareness only — check again at 10:00 BST"
+    elif run_name == "Morning scan":
+        context_msg = (
+            "This is the <strong>morning scan at 10:00 BST</strong>. "
             "These stocks are gapping up in premarket with elevated volume. "
-            "Open the dashboard to review, then run the pre-trade check at 13:00 and 14:00 "
-            "before committing."
+            "Open the dashboard to review. Confirm again at 11:00 BST and run the "
+            "pre-trade check at 12:00 BST before committing."
         )
-        action_msg = "Review candidates — market opens at 14:30 BST"
-    elif "13:00" in bst_time:
+        action_msg = "Review candidates — run pre-trade check at 12:00 BST"
+    elif run_name == "Mid-morning check":
         context_msg = (
-            "This is the <strong>mid-morning check at 13:00 BST</strong>. "
+            "This is the <strong>mid-morning check at 11:00 BST</strong>. "
             "These candidates are still scoring above the threshold — momentum is holding. "
-            "Use the pre-trade confirmation button on the dashboard to see the full picture."
+            "Run the pre-trade confirmation check on the dashboard at 12:00 BST. "
+            "Entry window opens at 13:30 BST."
         )
-        action_msg = "Run pre-trade check on dashboard — 90 minutes to open"
+        action_msg = "Run pre-trade check at 12:00 BST — entry window 13:30 BST"
+    elif run_name == "Final check before entry":
+        context_msg = (
+            "This is the <strong>final check at 12:00 BST</strong>. "
+            "This is your last data refresh before the entry window opens at 13:30 BST. "
+            "Run the pre-trade check on the dashboard NOW and make your go/no-go decision. "
+            "Only trade tickers showing 🟢 Green."
+        )
+        action_msg = "Final decision time — entry window opens at 13:30 BST"
     else:
         context_msg = (
-            "This is the <strong>final check at 14:00 BST</strong>. "
-            "30 minutes until the market opens. These candidates are still strong. "
-            "Run the pre-trade check now and decide whether to trade."
+            "This is a <strong>manual scan</strong>. "
+            "Review the candidates below and check the dashboard for the full picture."
         )
-        action_msg = "Final decision time — market opens at 14:30 BST"
+        action_msg = "Review candidates on dashboard"
 
     # Plain text
     lines = [
@@ -117,7 +139,7 @@ def build_email(candidates, run_name, bst_time, is_morning_scan):
         "",
     ]
     for _, row in candidates.iterrows():
-        gap_str  = f"+{row['gap_pct']*100:.1f}%" if row['gap_pct'] > 0 else "—"
+        gap_str = f"+{row['gap_pct']*100:.1f}%" if row['gap_pct'] > 0 else "—"
         lines.append(
             f"  {row['ticker']:<6}  Score: {row['score']:.1f}  "
             f"Gap: {gap_str}  RVOL: {row['rvol']:.1f}x  "
@@ -136,10 +158,10 @@ def build_email(candidates, run_name, bst_time, is_morning_scan):
     # HTML rows
     rows_html = ""
     for _, row in candidates.iterrows():
-        gap_pct  = row["gap_pct"] * 100
-        gap_str  = f"+{gap_pct:.1f}%" if gap_pct > 0 else "—"
-        gap_col  = "#27ae60" if gap_pct > 0 else "#888888"
-        score    = row["score"]
+        gap_pct   = row["gap_pct"] * 100
+        gap_str   = f"+{gap_pct:.1f}%" if gap_pct > 0 else "—"
+        gap_col   = "#27ae60" if gap_pct > 0 else "#888888"
+        score     = row["score"]
         score_col = "#27ae60" if score >= 15 else "#f39c12" if score >= 12 else "#e74c3c"
         rows_html += f"""
         <tr>
@@ -151,8 +173,15 @@ def build_email(candidates, run_name, bst_time, is_morning_scan):
           <td style="padding:10px 12px;">{int(row['trend_5d'])}/5</td>
         </tr>"""
 
-    # Run badge colour
-    badge_col = "#2E5FA3" if is_morning_scan else "#f39c12" if "13:00" in bst_time else "#c0392b"
+    # Badge colour: blue = early, amber = mid, red = final
+    if run_name == "Early pulse":
+        badge_col = "#666666"
+    elif run_name == "Morning scan":
+        badge_col = "#2E5FA3"
+    elif run_name == "Mid-morning check":
+        badge_col = "#f39c12"
+    else:
+        badge_col = "#c0392b"
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -271,16 +300,16 @@ def send_email(plain, html, candidates, run_name, bst_time):
 
 
 if __name__ == "__main__":
-    run_name, bst_time, is_morning_scan = get_run_context()
+    run_name, bst_time, is_early_run = get_run_context()
     print(f"Running as: {run_name} ({bst_time})")
 
     df = load_universe()
-    candidates = get_candidates(df, is_morning_scan)
+    candidates = get_candidates(df, is_early_run)
 
     if candidates.empty:
         print(
             f"No candidates above score {SCORE_THRESHOLD}"
-            + (" with real gap" if is_morning_scan else "")
+            + (" with real gap" if is_early_run else "")
             + f" at {bst_time} — no alert sent"
         )
         sys.exit(0)
@@ -288,5 +317,5 @@ if __name__ == "__main__":
     tickers = ", ".join(candidates["ticker"].tolist())
     print(f"Found {len(candidates)} candidate(s): {tickers}")
 
-    plain, html = build_email(candidates, run_name, bst_time, is_morning_scan)
+    plain, html = build_email(candidates, run_name, bst_time, is_early_run)
     send_email(plain, html, candidates, run_name, bst_time)
