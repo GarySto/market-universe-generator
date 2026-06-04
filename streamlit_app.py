@@ -13,49 +13,66 @@ _now_bst = datetime.now(_pytz.utc).astimezone(_BST)
 _hour_bst = _now_bst.hour
  
 # Time-sensitive context banner
-if 8 <= _hour_bst < 9:
+# Schedule (new, 2hr earlier to buffer GitHub Actions delays):
+#   06:00 UTC = 07:00 BST — early pulse
+#   09:00 UTC = 10:00 BST — morning scan
+#   10:00 UTC = 11:00 BST — mid-morning check
+#   11:00 UTC = 12:00 BST — final check (data reliably fresh before 13:30 entry window)
+if 7 <= _hour_bst < 8:
     st.warning(
-        "⏰ **09:00 BST early scan** — Premarket has just opened. "
-        "Volume is thin and gaps can be misleading at this stage. "
-        "Use this data for **awareness only** — do not place any orders yet. "
+        "⏰ **07:00 BST — early pulse scan** — Premarket has just opened. "
+        "Volume is very thin at this stage and gaps are unreliable. "
+        "Use this data for **awareness only** — do not place any orders. "
         "The strategy entry window is **13:30–14:15 BST**."
     )
-elif 9 <= _hour_bst < 12:
+elif 8 <= _hour_bst < 10:
     st.info(
         "📡 **Premarket building** — Gaps and volume are developing but not yet reliable. "
-        "Check back at 13:00 BST for the main scan. "
+        "The main scan runs at 10:00 BST. "
         "**No orders before 13:30 BST.**"
     )
-elif 12 <= _hour_bst < 13:
+elif _hour_bst == 10:
     st.info(
-        "🔍 **12:00 BST scan** — Premarket data is live. "
-        "This is an early read — confirm again at 13:00 and run the pre-trade check at 14:00. "
+        "🔍 **10:00 BST — morning scan** — Premarket data is building. "
+        "This is an early read — confirm again at 11:00 BST and run the pre-trade check at 12:00 BST. "
         "**Entry window: 13:30–14:15 BST only.**"
     )
-elif _hour_bst == 13:
+elif _hour_bst == 11:
     st.success(
-        "✅ **13:00 BST — Primary scan live.** "
-        "This is the main morning scan. Review top candidates now, "
-        "then run the **pre-trade confirmation check at 14:00–14:15 BST** before placing any order. "
+        "✅ **11:00 BST — mid-morning check live.** "
+        "Premarket data is now reliable. Review top candidates, "
+        "then run the **pre-trade confirmation check at 12:00–13:00 BST** before placing any order. "
         "**Entry window: 13:30–14:15 BST. Hard exit: 14:45 BST.**"
     )
-elif _hour_bst == 14:
+elif 12 <= _hour_bst < 13:
     st.error(
-        "🚨 **14:00 BST — FINAL CHECK WINDOW.** "
-        "Market opens in 30 minutes. Run the pre-trade check NOW. "
+        "🚨 **12:00 BST — FINAL CHECK WINDOW.** "
+        "Market opens in 90 minutes. Run the pre-trade check NOW. "
         "Only trade tickers showing 🟢 Green — skip anything 🟡 Amber or 🔴 Red. "
         "**Entry: 13:30–14:15 BST. Hard exit: 14:45 BST — NO EXCEPTIONS.**"
     )
-elif _hour_bst == 15 or (_hour_bst == 14 and _now_bst.minute >= 30):
+elif 13 <= _hour_bst < 14:
+    st.warning(
+        "⏳ **13:00–13:30 BST — approaching entry window.** "
+        "Final check data is from the 12:00 BST scan. Do not enter before 13:30 BST. "
+        "**Entry window opens at 13:30 BST. Hard exit: 14:45 BST.**"
+    )
+elif _hour_bst == 14 and _now_bst.minute < 30:
     st.error(
-        "⛔ **Market is open.** Entry window has closed (was 13:30–14:15 BST). "
+        "🚨 **Entry window OPEN — 13:30–14:15 BST.** "
+        "Only trade tickers that showed 🟢 Green at the 12:00 BST pre-trade check. "
+        "**Hard exit: 14:45 BST — NO EXCEPTIONS.**"
+    )
+elif _hour_bst == 14 and _now_bst.minute >= 30:
+    st.error(
+        "⛔ **Entry window closed.** No new positions. "
         "If you have an open position, your hard exit is **14:45 BST**. "
-        "Do not enter new positions now."
+        "Exit now if you haven't already."
     )
 elif _hour_bst >= 15:
     st.info(
         "🔒 **Trading day closed.** No action required. "
-        "The next scan runs at 09:00 BST tomorrow (Mon–Fri)."
+        "The next scan runs at 07:00 BST tomorrow (Mon–Fri)."
     )
  
 # ============================================================
