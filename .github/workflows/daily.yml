@@ -2,10 +2,10 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 8 * * 1-5"    # 08:00 UTC = 09:00 BST — early premarket pulse
-    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — gap data building
-    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — main scan, premarket reliable
-    - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final check before open
+    - cron: "0 6 * * 1-5"    # 06:00 UTC = 07:00 BST — early premarket pulse (2hr buffer for GH delay)
+    - cron: "0 9 * * 1-5"    # 09:00 UTC = 10:00 BST — gap data building (2hr buffer)
+    - cron: "0 10 * * 1-5"   # 10:00 UTC = 11:00 BST — main scan (2hr buffer, data reliable by 13:00 BST)
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — final check (2hr buffer, fresh before 13:30 entry)
   workflow_dispatch:
 
 jobs:
@@ -39,5 +39,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add output/universe.csv
-          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily universe update [$(date -u '+%H:%M UTC')]"
+          git commit -m "Universe update [$(date -u '+%H:%M:%S UTC')]" || echo "Nothing to commit"
           git push
