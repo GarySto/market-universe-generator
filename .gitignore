@@ -2,3 +2,6 @@ __pycache__/
 *.pyc 
 *.xlsm 
 *.zip 
+tickers_backup.txt 
+tickers_cleaned.txt 
+tickers_removed.txt 
