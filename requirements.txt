@@ -4,3 +4,4 @@ altair
 yfinance
 numpy
 pytz
+requests
