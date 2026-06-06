@@ -1,0 +1,38 @@
+name: Pre-market data logger
+
+on:
+  schedule:
+    # 08:00 UTC = 09:00 BST = 1.5 hours before NYSE open
+    # Runs Mon-Fri only
+    - cron: "0 8 * * 1-5"
+  workflow_dispatch:  # manual trigger for testing
+
+jobs:
+  log-premarket:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas pytz requests
+
+      - name: Run pre-market logger
+        env:
+          T212_API_KEY: ${{ secrets.T212_API_KEY }}
+        run: python premarket_log.py
+
+      - name: Commit pre-market snapshot
+        run: |
+          git config user.name "GarAI Bot"
+          git config user.email "actions@github.com"
+          git add output/premarket_latest.csv
+          git diff --staged --quiet || git commit -m "Pre-market snapshot $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
