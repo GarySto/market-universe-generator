@@ -426,7 +426,7 @@ except Exception:
     st.caption("Automatically generated daily from your GitHub Actions pipeline")
  
 
-tab1, tab2, tab3, tab4 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trades"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Scanner", "Trade Today", "Backtest", "My Trades", "🔗 Intraday Signals"])
 
 
 # ============================================================
@@ -1407,3 +1407,89 @@ with tab4:
                                      "win_loss","score","gap_pct","pretrade_check","why_picked","notes"]
                         if c in trades.columns or c in ["return_pct","win_loss"]]
         st.dataframe(trades[display_cols] if display_cols else trades, use_container_width=True)
+
+# ============================================================
+# TAB 5 — INTRADAY SIGNALS (GarAI cross-feed)
+# ============================================================
+
+with tab5:
+    st.markdown("### GarAI Intraday Scanner — live signals")
+    st.caption(
+        "This tab shows live signals from the GarAI Intraday Scanner, updated every 30 minutes "
+        "during market hours (14:30–21:00 BST). Use premarket picks from the Scanner tab as "
+        "context — stocks appearing in both scanners have a compounded signal."
+    )
+
+    INTRADAY_CSV = (
+        "https://raw.githubusercontent.com/GarySto/garai-intraday-scanner"
+        "/main/output/intraday.csv"
+    )
+
+    @st.cache_data(ttl=300)
+    def load_intraday_signals():
+        try:
+            return pd.read_csv(INTRADAY_CSV)
+        except Exception:
+            return None
+
+    intraday_df = load_intraday_signals()
+
+    if intraday_df is None or intraday_df.empty:
+        st.info(
+            "No intraday signals yet — scanner runs every 30 minutes between "
+            "14:30 and 21:00 BST on weekdays."
+        )
+    else:
+        last_scan = intraday_df["scan_time"].iloc[0] if "scan_time" in intraday_df.columns else "Unknown"
+        st.markdown(f"**Last intraday scan:** {last_scan} &nbsp;·&nbsp; **{len(intraday_df)} candidates**")
+
+        m1 = intraday_df[intraday_df["mode"] == "MODE1_MOMENTUM"]
+        m2 = intraday_df[intraday_df["mode"] == "SUPPORT_BOUNCE"]
+        resist = intraday_df[intraday_df["mode"] == "RESISTANCE_WARNING"]
+
+        # Cross-reference with today's momentum scanner picks
+        try:
+            uni_df = pd.read_csv(
+                "https://raw.githubusercontent.com/GarySto/market-universe-generator"
+                "/main/output/universe.csv"
+            )
+            pm_tickers = set(uni_df[uni_df["score"] > 9]["ticker"].tolist()) if not uni_df.empty else set()
+        except Exception:
+            pm_tickers = set()
+
+        if pm_tickers:
+            overlap = set(intraday_df["ticker"].tolist()) & pm_tickers
+            if overlap:
+                st.success(
+                    f"**Double signal — appeared in both scanners today:** "
+                    f"{', '.join(sorted(overlap))}"
+                )
+
+        itab1, itab2, itab3 = st.tabs(["Mode 1 — Momentum", "Mode 2 — Support bounce", "Resistance warnings"])
+
+        with itab1:
+            if m1.empty:
+                st.info("No Mode 1 momentum candidates in current scan.")
+            else:
+                cols = [c for c in ["ticker","price","score","pct_from_open","rvol","entry_note"] if c in m1.columns]
+                st.dataframe(m1[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+
+        with itab2:
+            if m2.empty:
+                st.info("No Mode 2 support bounce candidates in current scan.")
+            else:
+                cols = [c for c in ["ticker","price","score","level_price","level_touches","dist_pct","stop_loss","entry_note"] if c in m2.columns]
+                st.dataframe(m2[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+
+        with itab3:
+            if resist.empty:
+                st.info("No resistance warnings in current scan.")
+            else:
+                cols = [c for c in ["ticker","price","score","level_price","level_touches","dist_pct"] if c in resist.columns]
+                st.dataframe(resist[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.caption(
+        "GarAI Intraday Scanner: garai-intraday.streamlit.app · "
+        "Signals update every 30 minutes during market hours · Not financial advice."
+    )
