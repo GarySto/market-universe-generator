@@ -1413,83 +1413,91 @@ with tab4:
 # ============================================================
 
 with tab5:
-    st.markdown("### GarAI Intraday Scanner — live signals")
+    st.header("🔗 GarAI Intraday Scanner — live signals")
     st.caption(
-        "This tab shows live signals from the GarAI Intraday Scanner, updated every 30 minutes "
-        "during market hours (14:30–21:00 BST). Use premarket picks from the Scanner tab as "
-        "context — stocks appearing in both scanners have a compounded signal."
+        "Live signals from the GarAI Intraday Scanner, updated every 30 minutes "
+        "during market hours (14:30–21:00 BST). "
+        "Stocks appearing in BOTH the momentum scanner and intraday scanner have a compounded signal — "
+        "strongest candidates of the day."
     )
 
-    INTRADAY_CSV = (
+    INTRADAY_CSV_URL = (
         "https://raw.githubusercontent.com/GarySto/garai-intraday-scanner"
         "/main/output/intraday.csv"
     )
 
     @st.cache_data(ttl=300)
-    def load_intraday_signals():
+    def load_intraday():
         try:
-            return pd.read_csv(INTRADAY_CSV)
+            df = pd.read_csv(INTRADAY_CSV_URL)
+            return df
         except Exception:
             return None
 
-    intraday_df = load_intraday_signals()
+    intraday_df = load_intraday()
 
     if intraday_df is None or intraday_df.empty:
         st.info(
-            "No intraday signals yet — scanner runs every 30 minutes between "
-            "14:30 and 21:00 BST on weekdays."
+            "No intraday signals yet — the scanner runs every 30 minutes "
+            "between 14:30 and 21:00 BST on weekdays."
         )
     else:
         last_scan = intraday_df["scan_time"].iloc[0] if "scan_time" in intraday_df.columns else "Unknown"
-        st.markdown(f"**Last intraday scan:** {last_scan} &nbsp;·&nbsp; **{len(intraday_df)} candidates**")
+        total = len(intraday_df)
+        st.markdown(f"**Last intraday scan:** {last_scan} &nbsp;·&nbsp; **{total} candidates**")
 
-        m1 = intraday_df[intraday_df["mode"] == "MODE1_MOMENTUM"]
-        m2 = intraday_df[intraday_df["mode"] == "SUPPORT_BOUNCE"]
-        resist = intraday_df[intraday_df["mode"] == "RESISTANCE_WARNING"]
-
-        # Cross-reference with today's momentum scanner picks
+        # Cross-reference with momentum scanner top picks
         try:
             uni_df = pd.read_csv(
                 "https://raw.githubusercontent.com/GarySto/market-universe-generator"
                 "/main/output/universe.csv"
             )
-            pm_tickers = set(uni_df[uni_df["score"] > 9]["ticker"].tolist()) if not uni_df.empty else set()
-        except Exception:
-            pm_tickers = set()
-
-        if pm_tickers:
+            pm_tickers = set(uni_df[uni_df["score"] > 7]["ticker"].tolist()) if not uni_df.empty else set()
             overlap = set(intraday_df["ticker"].tolist()) & pm_tickers
             if overlap:
                 st.success(
-                    f"**Double signal — appeared in both scanners today:** "
+                    f"**Double signal today — in both scanners:** "
                     f"{', '.join(sorted(overlap))}"
                 )
+        except Exception:
+            pass
 
-        itab1, itab2, itab3 = st.tabs(["Mode 1 — Momentum", "Mode 2 — Support bounce", "Resistance warnings"])
+        m1 = intraday_df[intraday_df["mode"] == "MODE1_MOMENTUM"].sort_values("score", ascending=False)
+        m2 = intraday_df[intraday_df["mode"] == "SUPPORT_BOUNCE"].sort_values("score", ascending=False)
+        resist = intraday_df[intraday_df["mode"] == "RESISTANCE_WARNING"].sort_values("score", ascending=False)
+
+        itab1, itab2, itab3 = st.tabs([
+            f"🚀 Mode 1 Momentum ({len(m1)})",
+            f"🟢 Mode 2 Support ({len(m2)})",
+            f"🔴 Resistance ({len(resist)})"
+        ])
 
         with itab1:
             if m1.empty:
                 st.info("No Mode 1 momentum candidates in current scan.")
             else:
-                cols = [c for c in ["ticker","price","score","pct_from_open","rvol","entry_note"] if c in m1.columns]
-                st.dataframe(m1[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+                st.caption("RSI 70+ signals only are worth acting on — backtest shows 54% WR vs 39% below RSI 40.")
+                cols = [c for c in ["ticker","price","score","pct_from_open","rvol","rsi_at_signal","entry_note"] if c in m1.columns]
+                st.dataframe(m1[cols], use_container_width=True, hide_index=True)
 
         with itab2:
             if m2.empty:
                 st.info("No Mode 2 support bounce candidates in current scan.")
             else:
+                st.caption("Multi-day holds. Set stop at stop_loss price immediately on entry.")
                 cols = [c for c in ["ticker","price","score","level_price","level_touches","dist_pct","stop_loss","entry_note"] if c in m2.columns]
-                st.dataframe(m2[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+                st.dataframe(m2[cols], use_container_width=True, hide_index=True)
 
         with itab3:
             if resist.empty:
-                st.info("No resistance warnings in current scan.")
+                st.info("No resistance warnings.")
             else:
+                st.caption("Check if you hold any of these — consider exiting near the resistance level.")
                 cols = [c for c in ["ticker","price","score","level_price","level_touches","dist_pct"] if c in resist.columns]
-                st.dataframe(resist[cols].sort_values("score", ascending=False), use_container_width=True, hide_index=True)
+                st.dataframe(resist[cols], use_container_width=True, hide_index=True)
 
     st.divider()
     st.caption(
         "GarAI Intraday Scanner: garai-intraday.streamlit.app · "
-        "Signals update every 30 minutes during market hours · Not financial advice."
+        "Not financial advice · Real money, real rules, real data."
     )
