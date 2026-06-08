@@ -1,5 +1,5 @@
 date,ticker,entry_time,exit_time,entry_price,exit_price,shares,score,gap_pct,rvol,pretrade_check,running_bank,why_picked,notes
-01/06/2026,SPCE,13:10,14:45,7.52,7.61,10.23,12.75,0,4.55,Green,50.68,Top score. RVOL 4.55. First ever trade.,Target touched at ~13:45 but OTC limit didn’t execute. Sell manually when target touched.
-02/06/2026,NAMM,13:49,14:59,2.02,2.12,33.88,14.37,0,7.34,Green,53.2,Top scorer. RVOL 7.34.,Overrode system on hunch. Code issues during trade.
-03/06/2026,MRVL,12:43,14:46,36.66,26.91,2.06,11.78,0.11,2.56,Red,44.16,Top morning score.,Early entry. Same pattern as BB — momentum collapsed.
-08/06/2026,SUNE,13:56,14:27,2.7,3.02,23.7,0,0,0,N/A,54.28,Found via T212 Top Movers.,"RSI ~47, MACD turning green. Scanner was down."
+01/06/2026,SPCE,13:10,14:45,7.52,7.61,7.56,12.75,0,4.55,Green,50.68,"Top score. RVOL 4.55. First ever trade.","Target touched at ~13:45 but OTC limit didn’t execute. Sell manually when target touched."
+02/06/2026,NAMM,13:49,14:59,2.02,2.12,25.2,14.37,0,7.34,Green,53.20,"Top scorer. RVOL 7.34.","Overrode system on hunch. Code issues during trade."
+03/06/2026,MRVL,12:43,14:46,36.66,26.91,0.93,11.78,0.11,2.56,Red,44.16,"Top morning score.","Early entry. Same pattern as BB — momentum collapsed."
+08/06/2026,SUNE,13:56,14:27,2.70,3.02,31.63,0,0,0,N/A,54.28,"Found via T212 Top Movers.","RSI ~47, MACD turning green. Scanner was down."
