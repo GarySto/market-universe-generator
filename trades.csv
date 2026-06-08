@@ -1,42 +1,6 @@
-Date,Ticker,"Entry Time
-(BST)","Exit Time
-(BST)","Entry
-Price ($)","Exit
-Price ($)","FX Rate
-(�1=$)","Shares
-Bought","Capital
-In (�)","Entry
-Before
-13:30?","Pre-trade
-Check","Actual
-Entry vs
-Window","Return
-(�)","Return
-(%)","Win /
-Loss","Running
-Bank (�)","Intraday
-High (%
-from entry)","Morning
-Score",Gap %,RVOL,"Pre-mkt
-RVOL","Trend
-5d","Breakout
-Score","RSI
-(pre-mkt)","MACD
-Signal","Above
-20 EMA?","Above
-50 EMA?","Vol
-Spike?","Live
-Score
-(14:00)","Score
-Delta","Live
-Gap %","Live
-RVOL","Why
-Picked","Rule
-Violation?",Key Lesson
-,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-01/06/2026,SPCE,13:10,14:45,7.52,7.61,1.34658999,10.2311655,49.92,No,?? Green,? In window,0.683804946,1.196808511,?? Partial,50.68380495,,12.7526,0,4.55,0,3,0.85,34.27,Bearish,No,No,No,,,,,"Top score. Score 12.75, RVOL 4.55. First ever trade.",None,Target touched at ~13:45 but OTC limit didn't execute. KEY: sell manually when target touched.
-02/06/2026,NAMM,13:49,14:59,2.02,2.12,1.34725999,33.88166296,50.8,No,?? Green,?? Late (13:49),2.514857059,4.95049505,?? Partial,53.198662,,14.372,0,7.34,0,4,0.72,48.32,Neutral,Yes,No,Yes,,,,,"Top scorer. Score 14.37, RVOL 7.34.",Overrode system on hunch,Code issues during trade. System advised against but traded anyway.
-03/06/2026,BB,12:44,14:46,10.95,10.02,1.34492999,6.64604221,54.19,YES,?? Red,? Early (12:44),-4.595643863,-8.493150685,? Loss,48.60301814,-8.49,10.0868,0.0824,1.2585,0,5,0.9976,27.51,Bearish,No,No,No,2,-8.0868,0,0,Score #2 on 03/06. Traded as game trade.,Early entry (12:44 vs 13:30 window). Ignored RED light.,Pre-trade RED correctly flagged gone momentum. Should not have entered early.
-03/06/2026,MRVL,12:43,14:46,326.66,297.61,1.34492995,0.20553145,50,YES,?? Red,? Early (12:43),-4.439404909,-8.893038633,? Loss,44.16361323,,11.7761,0.1123,2.5609,0,4,0.996,34.45,Bearish,No,No,No,2,-9.7761,0,0,Top morning score 11.78. Side trade (not game trade).,Early entry. Ignored RED light.,"Same pattern as BB � high morning score, collapsed by open. Entry timing is the issue."
-03/06/2026,GME,12:52,14:46,23.4,,1.34534304,1.5,26.13,YES,?? Red,? Early (12:52),,,,44.16361323,,7.3879,0.0865,1.0918,0,1,0.0163,49.13,Bearish,No,No,No,0,-7.3879,0,0,Morning score 7.39. Side trade.,Early entry. Ignored RED light.,Live score 0.00 at pre-trade � completely gone. Breakout score 0.016 � near bottom of range.
-08/06/2026,SUNE,13:56,14:27,2.7,3.02,1.33487,23.70135844,48.01,No,? N/A,? In window,5.681777777,11.85185185,? Win,49.84539101,,0,0,0,0,,,47.02,Bearish?Green hunch,,,,,,,,"Found on T212 Top Movers (scanner broken). 1min chart RSI ~47, MACD red turning green. Hunch play.",No,Premarket scanner was down � found via T212 Top Movers. RSI 47 not ideal (backtest edge = RSI 70+). Closed early due to backtest frustration. SUNE hit $9.50+ � limit at $3.00 was very conservative. Use trailing stop next time on gap-up plays. This is the exact scenario for integrated 3-model approach.
+date,ticker,entry_time,exit_time,entry_price,exit_price,shares,score,gap_pct,rvol,pretrade_check,running_bank,why_picked,notes
+01/06/2026	SPCE	13:10	14:45	7.52	7.61	1.34658999	10.2311655	49.92	No	🟢 Green	✅ In window	0.683804946	1.196808511	⚠️ Partial	50.68380495		12.7526	0	4.55	0	3	0.85	34.27	Bearish	No	No	No					Top score. Score 12.75, RVOL 4.55. First ever trade.	None	Target touched at ~13:45 but OTC limit didn't execute. KEY: sell manually when target touched.
+02/06/2026	NAMM	13:49	14:59	2.02	2.12	1.34725999	33.88166296	50.8	No	🟢 Green	⚠️ Late (13:49)	2.514857059	4.95049505	⚠️ Partial	53.198662		14.372	0	7.34	0	4	0.72	48.32	Neutral	Yes	No	Yes					Top scorer. Score 14.37, RVOL 7.34.	Overrode system on hunch	Code issues during trade. System advised against but traded anyway.
+03/06/2026	BB	12:44	14:46	10.95	10.02	1.34492999	6.64604221	54.19	YES	🔴 Red	❌ Early (12:44)	-4.595643863	-8.493150685	❌ Loss	48.60301814	-8.49	10.0868	0.0824	1.2585	0	5	0.9976	27.51	Bearish	No	No	No	2	-8.0868	0	0	Score #2 on 03/06. Traded as game trade.	Early entry (12:44 vs 13:30 window). Ignored RED light.	Pre-trade RED correctly flagged gone momentum. Should not have entered early.
+08/06/2026	SUNE	13:56	14:27	2.7	3.02	1.33487	23.70135844	48.01	No	⚪ N/A	✅ In window	5.681777777	11.85185185	✅ Win	54.28479592		0	0	0	0			47.02	Bearish→Green hunch								Found on T212 Top Movers (scanner broken). 1min chart RSI ~47, MACD red turning green. Hunch play.	No	Premarket scanner was down — found via T212 Top Movers. RSI 47 not ideal (backtest edge = RSI 70+). Closed early due to backtest frustration. SUNE hit $9.50+ — limit at $3.00 was very conservative. Use trailing stop next time on gap-up plays. This is the exact scenario for integrated 3-model approach.
+
