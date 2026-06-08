@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
+import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,7 +15,51 @@ MIN_PRICE    = 1.50
 MAX_PRICE    = 75.0
 MIN_AVG_VOL  = 200_000
 MIN_HISTORY  = 10
+
+# RSI filter thresholds (from 1.8M signal backtest)
+RSI_STRONG_MIN  = 50    # RSI above this = good signal
+RSI_STRONG_MAX  = 70    # RSI above this = overbought risk
+RSI_AVOID_MAX   = 40    # RSI below this = skip (39% WR in backtest)
+
+# D drive paths — only available on home PC, not GitHub Actions
+D_TECH_DIR = r"D:\GarAI\data\technicals"
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _load_d_drive_rsi(ticker):
+    """Load RSI from D drive — returns float or None."""
+    safe = ticker.replace(".", "-")
+    path = os.path.join(D_TECH_DIR, f"{safe}_rsi.csv")
+    if not os.path.exists(path):
+        return None
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
+        rsi_cols = [c for c in df.columns if "rsi" in c.lower()]
+        if not rsi_cols:
+            return None
+        return round(float(df[rsi_cols[0]].dropna().iloc[-1]), 1)
+    except Exception:
+        return None
+
+
+def _load_d_drive_macd(ticker):
+    """Load MACD signal from D drive — returns 'bullish', 'bearish', or None."""
+    safe = ticker.replace(".", "-")
+    path = os.path.join(D_TECH_DIR, f"{safe}_macd.csv")
+    if not os.path.exists(path):
+        return None
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
+        macd_cols = [c for c in df.columns if "macd" in c.lower()
+                     and "signal" not in c.lower()]
+        sig_cols  = [c for c in df.columns if "signal" in c.lower()]
+        if not macd_cols or not sig_cols:
+            return None
+        macd_val = float(df[macd_cols[0]].dropna().iloc[-1])
+        sig_val  = float(df[sig_cols[0]].dropna().iloc[-1])
+        return "bullish" if macd_val > sig_val else "bearish"
+    except Exception:
+        return None
 
 
 def load_tickers():
@@ -197,6 +242,12 @@ def build_universe(target_date=None):
     print(f"  → Premarket data returned for {len(premarket_data)} tickers")
 
     # Build final records
+    d_drive_available = os.path.exists(D_TECH_DIR)
+    if d_drive_available:
+        print(f"D drive technicals available — loading RSI/MACD...")
+    else:
+        print(f"D drive not available (GitHub Actions) — RSI/MACD will be None")
+
     records = []
     for t in eligible:
         try:
@@ -209,9 +260,13 @@ def build_universe(target_date=None):
             if not pm_price or pm_price <= 0:
                 pm_price = yc
 
-            gap_pct       = (pm_price - yc) / yc
-            rvol          = yv / avg_vol if avg_vol else 0.0
+            gap_pct        = (pm_price - yc) / yc
+            rvol           = yv / avg_vol if avg_vol else 0.0
             premarket_rvol = pm_volume / avg_vol if avg_vol else 0.0
+
+            # RSI and MACD from D drive (home PC only)
+            rsi_val  = _load_d_drive_rsi(t)  if d_drive_available else None
+            macd_sig = _load_d_drive_macd(t) if d_drive_available else None
 
             records.append({
                 "ticker":           t,
@@ -226,6 +281,8 @@ def build_universe(target_date=None):
                 "breakout_score":   float(base["breakout_score"]),
                 "atr_10d":          float(base["atr_10d"]),
                 "volatility_score": float(base["volatility_score"]),
+                "rsi":              rsi_val,
+                "macd_signal":      macd_sig,
             })
         except Exception:
             continue
@@ -253,21 +310,74 @@ def build_universe(target_date=None):
     pm_min, pm_max = _safe_min_max(pm_raw)
     df["premarket_momentum"] = _normalize(pm_raw, pm_min, pm_max)
 
-    # ── Scoring ───────────────────────────────────────────────────────────────
+    # ── RSI scoring factor ────────────────────────────────────────────────────
+    # RSI 50-70 = ideal (score boost), 70-80 = acceptable, above 80 = penalty,
+    # below 40 = penalty. None (D drive unavailable) = neutral (0.5).
+    def rsi_factor(rsi):
+        if rsi is None:
+            return 0.5    # neutral when data not available
+        if rsi < RSI_AVOID_MAX:
+            return 0.0    # 39% WR in backtest — penalise heavily
+        elif rsi <= RSI_STRONG_MIN:
+            return 0.3    # below ideal but not terrible
+        elif rsi <= RSI_STRONG_MAX:
+            return 1.0    # sweet spot — full bonus
+        elif rsi <= 80:
+            return 0.6    # slightly overbought
+        else:
+            return 0.2    # very overbought — fade risk
+
+    df["rsi_factor"] = df["rsi"].apply(rsi_factor)
+
+    # ── MACD scoring factor ───────────────────────────────────────────────────
+    # Bullish = bonus, bearish = penalty, None = neutral
+    df["macd_factor"] = df["macd_signal"].map(
+        {"bullish": 1.0, "bearish": 0.0}
+    ).fillna(0.5)
+
+    # ── Composite score ───────────────────────────────────────────────────────
+    # Original 6 signals + RSI + MACD
+    # RSI and MACD weighted at 1.5 each (meaningful but not dominant)
+    # RSI is from D drive so only available at home — when None, neutral 0.5
+    # doesn't distort relative rankings
     base_score = (
         5.0 * df["premarket_momentum"] +
         3.0 * df["norm_gap"] +
         2.0 * df["norm_breakout"] +
         1.0 * df["norm_rvol"] +
         1.0 * df["norm_trend"] +
-        0.5 * df["norm_volatility"]
+        0.5 * df["norm_volatility"] +
+        1.5 * df["rsi_factor"] +
+        1.0 * df["macd_factor"]
     )
 
     score = base_score.copy()
     score[df["gap_pct"] < 0]  = 0.0
     score[df["gap_pct"] == 0] = score[df["gap_pct"] == 0].clip(upper=9.0)
 
+    # Hard RSI filter — zero out signals with RSI below avoid threshold
+    # Only applied when D drive data is available (rsi is not None)
+    if df["rsi"].notna().any():
+        score[(df["rsi"].notna()) & (df["rsi"] < RSI_AVOID_MAX)] = 0.0
+
     df["score"] = score.round(4)
+
+    # Add RSI band label for dashboard display
+    def rsi_label(rsi):
+        if rsi is None:
+            return "—"
+        if rsi < 30:
+            return "oversold"
+        elif rsi < RSI_AVOID_MAX:
+            return "weak"
+        elif rsi <= RSI_STRONG_MIN:
+            return "neutral"
+        elif rsi <= RSI_STRONG_MAX:
+            return "strong ✓"
+        else:
+            return "overbought"
+
+    df["rsi_label"] = df["rsi"].apply(rsi_label)
 
     # Timestamp — seconds included so every run always produces a git diff
     df["scan_time_utc"] = datetime.utcnow().strftime("%H:%M:%S")
