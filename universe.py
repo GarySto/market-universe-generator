@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 os.makedirs("output", exist_ok=True)
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
-BATCH_SIZE   = 100   # tickers per yf.download() call
-MAX_WORKERS  = 5     # parallel threads for .info (premarket price) fetches
+BATCH_SIZE   = 50   # tickers per yf.download() call
+MAX_WORKERS  = 8     # parallel threads for .info (premarket price) fetches
 MIN_PRICE    = 1.50
 MAX_PRICE    = 75.0
 MIN_AVG_VOL  = 200_000
@@ -145,42 +145,33 @@ def fetch_all_history(tickers, start_dt, end_dt):
 
 def _fetch_premarket(ticker_str):
     """
-    Fetch pre-market price for a single ticker.
-    Uses yf.download with prepost=True — more reliable than .info preMarketPrice.
+    Fetch pre-market price using yf.Ticker.fast_info — much faster than
+    .info and more reliable than download for single-ticker premarket prices.
+    Falls back to last regular price if premarket not available.
     Returns (ticker, price_or_None, volume).
     """
     try:
-        import pytz
-        from datetime import datetime, timedelta, date
-        UTC = pytz.utc
-        BST = pytz.timezone("Europe/London")
+        tk = yf.Ticker(ticker_str)
+        fi = tk.fast_info
 
-        # Download last 2 days with pre/post market data at 1m interval
-        raw = yf.download(
-            ticker_str,
-            period="2d",
-            interval="1m",
-            prepost=True,
-            progress=False,
-            timeout=15,
-        )
+        # Try premarket price first
+        pm_price = None
+        pm_volume = 0
 
-        if raw is None or raw.empty:
-            return ticker_str, None, 0
+        # fast_info attributes vary by yfinance version
+        for attr in ['pre_market_price', 'preMarketPrice']:
+            val = getattr(fi, attr, None)
+            if val and val > 0:
+                pm_price = float(val)
+                break
 
-        now_utc = datetime.now(UTC)
-        # Pre-market = before 13:30 UTC (14:30 BST = NYSE open)
-        pm_cutoff = now_utc.replace(hour=13, minute=30, second=0, microsecond=0)
-        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Volume — less critical, use 0 if unavailable
+        for attr in ['pre_market_volume', 'preMarketVolume']:
+            val = getattr(fi, attr, None)
+            if val and val > 0:
+                pm_volume = int(val)
+                break
 
-        # Get today's pre-market candles
-        pm = raw[(raw.index >= today_start) & (raw.index < pm_cutoff)]
-
-        if pm.empty or pm["Volume"].sum() < 1000:
-            return ticker_str, None, 0
-
-        pm_price = float(pm["Close"].dropna().iloc[-1])
-        pm_volume = int(pm["Volume"].sum())
         return ticker_str, pm_price, pm_volume
 
     except Exception:
