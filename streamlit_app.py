@@ -3,6 +3,7 @@ import pandas as pd
 import altair as alt
 import yfinance as yf
 import numpy as np
+import os
 from datetime import datetime, date, timedelta, timezone
 
 st.set_page_config(page_title="Momentum Scanner", layout="wide")
@@ -445,16 +446,77 @@ with tab1:
     show_glossary()
     st.divider()
 
+    # ── Score trend across morning snapshots ─────────────────────────────────
+    SNAPSHOT_HOURS  = [8, 10, 12, 13]
+    SNAPSHOT_LABELS = ["08:00", "10:00", "12:00", "13:00"]
+    snapshot_dfs    = {}
+
+    for h in SNAPSHOT_HOURS:
+        path = f"output/premarket_{h:02d}.csv"
+        if os.path.exists(path):
+            try:
+                s = pd.read_csv(path)
+                if "snapshot_utc" in s.columns:
+                    snap_dt = pd.to_datetime(s["snapshot_utc"].iloc[0], errors="coerce")
+                    if snap_dt is not None and snap_dt.date() == date.today():
+                        snapshot_dfs[h] = s.set_index("ticker")
+            except Exception:
+                pass
+
+    if len(snapshot_dfs) > 1:
+        st.subheader("📈 Score momentum through the morning")
+        st.caption(
+            "Tickers scoring above 7 in any scan, showing how their score evolved. "
+            "Rising = momentum building. Fading = losing conviction. "
+            "Only trade tickers still rising or steady at 13:00 BST."
+        )
+
+        # Build score trend table
+        hours_available = sorted(snapshot_dfs.keys())
+        all_tickers = set()
+        for h in hours_available:
+            top = snapshot_dfs[h][snapshot_dfs[h]["score"] > 7].head(20)
+            all_tickers.update(top.index.tolist())
+
+        if all_tickers:
+            trend_rows = []
+            for ticker in all_tickers:
+                row = {"ticker": ticker}
+                for h in SNAPSHOT_HOURS:
+                    label = f"{h:02d}:00"
+                    if h in snapshot_dfs and ticker in snapshot_dfs[h].index:
+                        row[label] = round(float(snapshot_dfs[h].loc[ticker, "score"]), 2)
+                    else:
+                        row[label] = None
+                # Trend direction
+                scores = [row[f"{h:02d}:00"] for h in hours_available if row.get(f"{h:02d}:00") is not None]
+                if len(scores) >= 2:
+                    diff = scores[-1] - scores[-2]
+                    row["trend"] = "↑ rising" if diff > 0.3 else ("↓ fading" if diff < -0.3 else "→ steady")
+                else:
+                    row["trend"] = "—"
+                trend_rows.append(row)
+
+            trend_df = pd.DataFrame(trend_rows).sort_values(
+                f"{hours_available[-1]:02d}:00", ascending=False, na_position="last"
+            )
+            st.dataframe(trend_df, use_container_width=True, hide_index=True)
+        st.divider()
+
     st.subheader("🏆 Top 10 Momentum Tickers")
     st.caption(
         "Sorted by score descending. These are the strongest momentum candidates from today's scan. "
         "Note: gap_pct and premarket_rvol will show as 0 outside of premarket hours — "
         "the scan runs at 13:00 BST specifically to capture live premarket data."
     )
-    top10 = df.head(10)[[
-        "ticker", "score", "gap_pct", "rvol", "premarket_rvol",
-        "trend_5d", "breakout_score", "volatility_score"
-    ]]
+
+    # Show trend arrow if available
+    display_cols = ["ticker", "score"]
+    if "trend_dir" in df.columns:
+        display_cols += ["trend_dir"]
+    display_cols += ["gap_pct", "rvol", "trend_5d", "breakout_score"]
+
+    top10 = df.head(10)[display_cols]
     st.dataframe(top10, use_container_width=True)
 
     gap_values = df["gap_pct"].dropna()
