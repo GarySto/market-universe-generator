@@ -145,14 +145,44 @@ def fetch_all_history(tickers, start_dt, end_dt):
 
 def _fetch_premarket(ticker_str):
     """
-    Fetch preMarketPrice and preMarketVolume for a single ticker via .info.
+    Fetch pre-market price for a single ticker.
+    Uses yf.download with prepost=True — more reliable than .info preMarketPrice.
     Returns (ticker, price_or_None, volume).
     """
     try:
-        info = yf.Ticker(ticker_str).info
-        price  = info.get("preMarketPrice")
-        volume = info.get("preMarketVolume") or 0
-        return ticker_str, price, volume
+        import pytz
+        from datetime import datetime, timedelta, date
+        UTC = pytz.utc
+        BST = pytz.timezone("Europe/London")
+
+        # Download last 2 days with pre/post market data at 1m interval
+        raw = yf.download(
+            ticker_str,
+            period="2d",
+            interval="1m",
+            prepost=True,
+            progress=False,
+            timeout=15,
+        )
+
+        if raw is None or raw.empty:
+            return ticker_str, None, 0
+
+        now_utc = datetime.now(UTC)
+        # Pre-market = before 13:30 UTC (14:30 BST = NYSE open)
+        pm_cutoff = now_utc.replace(hour=13, minute=30, second=0, microsecond=0)
+        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Get today's pre-market candles
+        pm = raw[(raw.index >= today_start) & (raw.index < pm_cutoff)]
+
+        if pm.empty or pm["Volume"].sum() < 1000:
+            return ticker_str, None, 0
+
+        pm_price = float(pm["Close"].dropna().iloc[-1])
+        pm_volume = int(pm["Volume"].sum())
+        return ticker_str, pm_price, pm_volume
+
     except Exception:
         return ticker_str, None, 0
 
