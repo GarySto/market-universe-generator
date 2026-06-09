@@ -37,8 +37,9 @@ MIN_AVG_VOL   = 200_000  # minimum 10-day avg volume
 MIN_HISTORY   = 10       # minimum days of OHLCV needed
 
 # T212 API
-T212_API_KEY  = os.environ.get("T212_API_KEY", "")
-T212_BASE     = "https://live.trading212.com/api/v0"
+T212_API_KEY    = os.environ.get("T212_API_KEY", "")
+T212_API_SECRET = os.environ.get("T212_API_SECRET", "")
+T212_BASE       = "https://live.trading212.com/api/v0"
 
 # RSI filter thresholds (from 1.8M signal backtest)
 RSI_STRONG_MIN = 50
@@ -87,7 +88,14 @@ def fetch_t212_prices(tickers):
         print("  T212_API_KEY not set — skipping T212 price fetch")
         return {}
 
-    headers = {"Authorization": T212_API_KEY}
+    # T212 beta API uses HTTP Basic Auth: key as username, secret as password
+    import base64
+    if T212_API_SECRET:
+        credentials = base64.b64encode(f"{T212_API_KEY}:{T212_API_SECRET}".encode()).decode()
+        headers = {"Authorization": f"Basic {credentials}"}
+    else:
+        # Fallback: try key alone (some T212 accounts use single key)
+        headers = {"Authorization": T212_API_KEY}
     prices  = {}
 
     # T212 instruments endpoint gives us ticker→instrumentId mapping

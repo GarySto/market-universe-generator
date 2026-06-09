@@ -2,17 +2,15 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 8 * * 1-5"    # 08:00 UTC = 09:00 BST — early pulse
-    - cron: "0 10 * * 1-5"   # 10:00 UTC = 11:00 BST — mid morning
-    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — KEY SCAN (peak premarket data, 1.5h before open)
-    - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final check before entry window
+    - cron: "0 6 * * 1-5"    # 06:00 UTC = 07:00 BST — early premarket pulse (2hr buffer for GH delay)
+    - cron: "0 9 * * 1-5"    # 09:00 UTC = 10:00 BST — gap data building (2hr buffer)
+    - cron: "0 10 * * 1-5"   # 10:00 UTC = 11:00 BST — main scan (2hr buffer, data reliable by 13:00 BST)
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — final check (2hr buffer, fresh before 13:30 entry)
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,9 +21,12 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install yfinance pandas numpy requests
+        run: pip install yfinance pandas numpy
 
       - name: Run universe builder
+        env:
+          T212_API_KEY:    ${{ secrets.T212_API_KEY }}
+          T212_API_SECRET: ${{ secrets.T212_API_SECRET }}
         run: python universe.py
 
       - name: Send alert email (if strong candidates found)
@@ -41,5 +42,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add output/universe.csv
-          git diff --staged --quiet || git commit -m "Universe update [$(date -u '+%H:%M:%S UTC')]"
+          git commit -m "Universe update [$(date -u '+%H:%M:%S UTC')]" || echo "Nothing to commit"
           git push
