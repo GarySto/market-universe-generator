@@ -41,6 +41,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add output/universe.csv
+          git add output/universe.csv output/premarket_*.csv
           git commit -m "Universe update [$(date -u '+%H:%M:%S UTC')]" || echo "Nothing to commit"
+          git pull --rebase --no-edit origin main
           git push
