@@ -108,7 +108,8 @@ def load_universe():
     df = pd.read_csv("output/universe.csv")
     df = df[df["ticker"] != "Ticker"]
     df = df.drop_duplicates(subset="ticker", keep="first")
-    df = df.sort_values("score", ascending=False).reset_index(drop=True)
+    df["score"] = pd.to_numeric(df["score"], errors="coerce")
+    df = df.sort_values("score", ascending=False, na_position="last").reset_index(drop=True)
     return df
 
 @st.cache_data(ttl=300)
@@ -516,7 +517,7 @@ with tab1:
         display_cols += ["trend_dir"]
     display_cols += ["gap_pct", "rvol", "trend_5d", "breakout_score"]
 
-    top10 = df.head(10)[display_cols]
+    top10 = df[df["score"].notna() & (df["score"] > 0)].head(10)[display_cols]
     st.dataframe(top10, use_container_width=True)
 
     gap_values = df["gap_pct"].dropna()

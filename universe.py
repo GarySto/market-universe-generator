@@ -135,11 +135,12 @@ def fetch_t212_universe():
     tradeable = set()
     for inst in instruments:
         raw = inst.get("ticker", "")
-        # T212 US equities: "AAPL_US_EQ" → "AAPL"
-        ticker = raw.split("_")[0] if "_" in raw else raw
-        if ticker:
-            tradeable.add(ticker)
-
+        # Only accept _US_EQ format — ISA-eligible US equities only
+        # Rejects ETFs, CFDs, international stocks, fractional-only instruments
+        if "_US_EQ" in raw:
+            clean = raw.replace("_US_EQ", "")
+            if clean and clean.isalpha():
+                tradeable.add(clean)
     print(f"  T212 ISA universe: {len(tradeable)} tradeable instruments")
     return tradeable
 
