@@ -516,7 +516,7 @@ with tab1:
         display_cols += ["trend_dir"]
     display_cols += ["gap_pct", "rvol", "trend_5d", "breakout_score"]
 
-    top10 = df.head(10)[display_cols]
+    top10 = df[df["score"].notna() & (df["score"] > 0)].head(10)[display_cols]
     st.dataframe(top10, use_container_width=True)
 
     gap_values = df["gap_pct"].dropna()
