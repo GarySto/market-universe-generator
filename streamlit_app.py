@@ -645,10 +645,8 @@ with tab2:
         # where the theoretical max is 5+3+2+1+1+0.5 = 12.5. A score of 7 means
         # the stock is in roughly the top tier across all signals.
         today_top = df[df["score"] >= 6].head(5).copy()
-    else:
-        today_top = pd.DataFrame()
 
-  if today_top.empty:
+    if today_top.empty:
         st.warning(
             "No tickers scoring above 6 today. "
             "The market isn't showing strong RSI or breakout signals right now. "
