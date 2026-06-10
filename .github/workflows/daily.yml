@@ -2,10 +2,11 @@ name: Daily Universe Build
 
 on:
   schedule:
-    - cron: "0 6 * * 1-5"    # 06:00 UTC = 07:00 BST — early premarket pulse (2hr buffer for GH delay)
-    - cron: "0 9 * * 1-5"    # 09:00 UTC = 10:00 BST — gap data building (2hr buffer)
-    - cron: "0 10 * * 1-5"   # 10:00 UTC = 11:00 BST — main scan (2hr buffer, data reliable by 13:00 BST)
-    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — final check (2hr buffer, fresh before 13:30 entry)
+    - cron: "0 6 * * 1-5"    # 06:00 UTC = 07:00 BST — early pulse
+    - cron: "0 9 * * 1-5"    # 09:00 UTC = 10:00 BST — morning scan
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 12:00 BST — premarket opening
+    - cron: "0 12 * * 1-5"   # 12:00 UTC = 13:00 BST — LIVE premarket (main scan)
+    - cron: "0 13 * * 1-5"   # 13:00 UTC = 14:00 BST — final before entry window
   workflow_dispatch:
 
 jobs:

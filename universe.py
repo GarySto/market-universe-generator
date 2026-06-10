@@ -174,7 +174,7 @@ def fetch_premarket_prices(tickers):
         try:
             data = yf.download(
                 batch,
-                period="1d",
+                period="2d",
                 interval="1m",
                 prepost=True,
                 auto_adjust=True,
