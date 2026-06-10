@@ -633,7 +633,6 @@ with tab2:
 | **Target** | +10% from your entry price |
 | **Hard exit** | **14:45 BST — close the position regardless of P&L** |
 | **No holding past 14:45** | This is a 15-minute momentum strategy, not a day trade |
-| **No gap data = no trade** | If gap_pct shows 0 for everything, the data isn't live yet |
         """
     )
     show_glossary()
@@ -645,26 +644,16 @@ with tab2:
         # Threshold is 7 (not 10) — scores are now normalised to a 0–12.5 scale
         # where the theoretical max is 5+3+2+1+1+0.5 = 12.5. A score of 7 means
         # the stock is in roughly the top tier across all signals.
-        today_top = df[(df["score"] > 7) & (df["gap_pct"] > 0)].head(5).copy()
+        today_top = df[df["score"] >= 6].head(5).copy()
     else:
         today_top = pd.DataFrame()
 
-    if today_top.empty:
-        if not has_gap_data:
-            st.warning(
-                "No premarket gap data available yet — all gap_pct values are showing as 0. "
-                "This happens when the scan runs before meaningful premarket activity has built up (before about 13:00 BST / 08:00 ET). "
-                "The 13:00 BST scan should populate this correctly. "
-                "Candidates shown without a real gap are driven by RVOL and trend alone, "
-                "which is not a strong enough signal for this strategy on its own. "
-                "Check back after 13:00 BST when the next scan runs."
-            )
-        else:
-            st.warning(
-                "No tickers above score 7 with a real premarket gap today. "
-                "This is a valid outcome — it means the market isn't showing the kind of activity this strategy looks for. "
-                "The correct move is to sit out and wait for tomorrow."
-            )
+  if today_top.empty:
+        st.warning(
+            "No tickers scoring above 6 today. "
+            "The market isn't showing strong RSI or breakout signals right now. "
+            "Sit out and check again tomorrow."
+        )
     else:
         st.subheader("Morning candidates (13:00 scan)")
         st.caption(

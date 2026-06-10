@@ -475,67 +475,119 @@ def build_universe(target_date=None):
 
     df = pd.DataFrame(records)
 
-    # Step 7: Normalise
-    gap_min,  gap_max  = _safe_min_max(df["gap_pct"])
-    rvol_min, rvol_max = _safe_min_max(df["rvol"])
-    brk_min,  brk_max  = _safe_min_max(df["breakout_score"])
-    vol_min,  vol_max  = _safe_min_max(df["volatility_score"])
+    # Step 7: Calculate RSI from OHLCV history (no D drive needed)
+    # This is the #1 predictor from the 3.2M signal backtest.
+    # RSI 90+: 61% WR. RSI <40: 38.7% WR — hard block.
+    def calc_rsi(hist, period=14):
+        try:
+            closes = hist["Close"].tail(30)
+            delta  = closes.diff()
+            gain   = delta.clip(lower=0).rolling(period).mean()
+            loss   = (-delta.clip(upper=0)).rolling(period).mean()
+            rs     = gain / loss
+            rsi    = 100 - (100 / (1 + rs))
+            return round(float(rsi.iloc[-1]), 1)
+        except Exception:
+            return None
 
-    df["norm_gap"]        = _normalize(df["gap_pct"],          gap_min,  gap_max)
+    # Build records with RSI calculated from yfinance history
+    for t in eligible:
+        try:
+            base = ohlcv_records[t]
+            hist = hist_data[t]
+            yc   = base["yesterday_close"]
+            yv   = base["yesterday_volume"]
+            av   = base["avg_volume_10d"]
+
+            # RSI from yfinance history — always available, no D drive needed
+            rsi_val = calc_rsi(hist)
+
+            # Hard block: RSI <40 = no edge (backtest proven)
+            if rsi_val is not None and rsi_val < 40:
+                continue
+
+            # Gap — display only, never drives score
+            pm_price = pm_prices.get(t, None)
+            has_gap  = pm_price is not None and pm_price > 0
+            gap_pct  = (pm_price - yc) / yc if has_gap else 0.0
+
+            rvol = yv / av if av else 0.0
+
+            records.append({
+                "ticker":          t,
+                "premarket_price": round(pm_price if has_gap else yc, 4),
+                "yesterday_close": round(yc, 4),
+                "gap_pct":         round(float(gap_pct), 4),
+                "rvol":            round(float(rvol), 4),
+                "avg_volume_10d":  int(av),
+                "trend_5d":        int(base["trend_5d"]),
+                "breakout_score":  round(float(base["breakout_score"]), 4),
+                "atr_10d":         round(float(base["atr_10d"]), 4),
+                "volatility_score":round(float(base["volatility_score"]), 4),
+                "rsi":             rsi_val,
+                "price_source":    "yf_premarket" if has_gap else "prev_close",
+            })
+        except Exception:
+            continue
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+
+    # Step 8: Score — purely from proven backtest signals, no gap dependency
+    #
+    # Weights from 3.2M signal backtest:
+    #   RSI band   — strongest single predictor (61% WR at 90+)
+    #   Breakout   — where price sits in 10-day range
+    #   RVOL       — volume confirmation
+    #   Trend 5d   — recent directional consistency
+    #   Volatility — move potential (ATR-based)
+    #   Gap bonus  — adds score IF available, never penalises if 0
+    #
+    # Score range: 0–10
+
+    def rsi_score(rsi):
+        if rsi is None:      return 3.0   # neutral when unknown
+        if rsi >= 90:        return 5.0   # 61% WR — strongest signal
+        elif rsi >= 80:      return 4.0   # 57.4% WR
+        elif rsi >= 70:      return 3.0   # 52.3% WR
+        elif rsi >= 50:      return 1.5   # neutral zone
+        else:                return 0.5   # weak but not blocked (block is <40)
+
+    def rsi_label(rsi):
+        if rsi is None:  return "—"
+        if rsi >= 90:    return "🔥 90+"
+        elif rsi >= 80:  return "strong ✓"
+        elif rsi >= 70:  return "good"
+        elif rsi >= 50:  return "neutral"
+        elif rsi >= 40:  return "weak"
+        else:            return "blocked"
+
+    rvol_min,  rvol_max  = _safe_min_max(df["rvol"])
+    brk_min,   brk_max   = _safe_min_max(df["breakout_score"])
+    vol_min,   vol_max   = _safe_min_max(df["volatility_score"])
+
     df["norm_rvol"]       = _normalize(df["rvol"],             rvol_min, rvol_max)
-    df["norm_pre_rvol"]   = df["norm_rvol"]
     df["norm_breakout"]   = _normalize(df["breakout_score"],   brk_min,  brk_max)
     df["norm_volatility"] = _normalize(df["volatility_score"], vol_min,  vol_max)
     df["norm_trend"]      = df["trend_5d"] / 5.0
+    df["rsi_score"]       = df["rsi"].apply(rsi_score)
+    df["rsi_label"]       = df["rsi"].apply(rsi_label)
 
-    pm_raw = df["norm_gap"].clip(lower=0) + df["norm_rvol"].clip(lower=0)
-    pm_min, pm_max = _safe_min_max(pm_raw)
-    df["premarket_momentum"] = _normalize(pm_raw, pm_min, pm_max)
+    # Gap bonus — only positive contribution, capped at 1.5
+    gap_min, gap_max = _safe_min_max(df["gap_pct"].clip(lower=0))
+    df["norm_gap"]   = _normalize(df["gap_pct"].clip(lower=0), gap_min, gap_max)
+    gap_bonus        = (df["norm_gap"] * 1.5).clip(upper=1.5)
 
-    # Step 8: RSI factor
-    def rsi_factor(rsi):
-        if rsi is None:              return 0.5
-        if rsi < RSI_AVOID_MAX:      return 0.0
-        elif rsi <= RSI_STRONG_MIN:  return 0.3
-        elif rsi <= RSI_STRONG_MAX:  return 1.0
-        elif rsi <= 80:              return 0.6
-        else:                        return 0.2
-
-    df["rsi_factor"]  = df["rsi"].apply(rsi_factor)
-    df["macd_factor"] = df["macd_signal"].map({"bullish": 1.0, "bearish": 0.0}).fillna(0.5)
-
-    # Step 9: Score
-    base_score = (
-        5.0 * df["premarket_momentum"] +
-        3.0 * df["norm_gap"] +
-        2.0 * df["norm_breakout"] +
-        1.0 * df["norm_rvol"] +
-        1.0 * df["norm_trend"] +
-        0.5 * df["norm_volatility"] +
-        1.5 * df["rsi_factor"] +
-        1.0 * df["macd_factor"]
-    )
-
-    score = base_score.copy()
-    score[df["gap_pct"] < 0]  = 0.0
-    score[df["gap_pct"] == 0] = score[df["gap_pct"] == 0].clip(upper=9.0)
-
-    # Hard RSI block (only when D drive data available)
-    if df["rsi"].notna().any():
-        score[(df["rsi"].notna()) & (df["rsi"] < RSI_AVOID_MAX)] = 0.0
-
-    df["score"] = score.round(4)
-
-    # RSI label for dashboard
-    def rsi_label(rsi):
-        if rsi is None:              return "—"
-        if rsi < 30:                 return "oversold"
-        elif rsi < RSI_AVOID_MAX:    return "weak"
-        elif rsi <= RSI_STRONG_MIN:  return "neutral"
-        elif rsi <= RSI_STRONG_MAX:  return "strong ✓"
-        else:                        return "overbought"
-
-    df["rsi_label"] = df["rsi"].apply(rsi_label)
+    df["score"] = (
+        df["rsi_score"]             +   # 0–5  (biggest weight — backtest proven)
+        2.0 * df["norm_breakout"]   +   # 0–2  (near top of range = breakout candidate)
+        1.5 * df["norm_rvol"]       +   # 0–1.5 (volume confirmation)
+        1.0 * df["norm_trend"]      +   # 0–1  (directional consistency)
+        0.5 * df["norm_volatility"] +   # 0–0.5 (move potential)
+        gap_bonus                       # 0–1.5 (bonus only — never penalises)
+    ).clip(upper=10.0).round(4)
 
     # Step 10: Score trend vs previous snapshot
     prev_scores = load_previous_snapshot(utc_hour)
@@ -571,7 +623,7 @@ if __name__ == "__main__":
         print(f"Tickers with live premarket price : {pm_count}")
         print(f"Tickers using prev_close fallback : {pc_count}")
 
-        top = df[df["score"] > 7].head(10)
+        top = df[df["score"] > 6].head(10)
         if not top.empty:
             print("\nTop candidates (score > 7):")
             cols = ["ticker", "score", "gap_pct", "rvol", "breakout_score", "trend_dir", "price_source"]
