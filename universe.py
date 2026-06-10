@@ -148,52 +148,73 @@ def fetch_t212_universe():
 
 def fetch_premarket_prices(tickers):
     """
-    Fetch live premarket prices for a list of tickers using yfinance fast_info.
+    Fetch premarket prices via yf.download() with prepost=True.
 
-    WHY fast_info not yf.download():
-      yf.download() fetches full OHLCV history — expensive for a price check.
-      fast_info is a lightweight property bag that includes pre_market_price
-      when called before market open. Much faster, same rate limit profile.
+    WHY not fast_info.pre_market_price:
+      fast_info makes one HTTP request per ticker. At 1,000+ tickers on
+      GitHub Actions, Yahoo's servers rate-limit the runner IP almost
+      immediately — returns 0 prices every time.
 
-    WHY not T212 per-ticker endpoint:
-      T212's /equity/metadata/instruments/{ticker} returns instrument metadata
-      (name, ISIN, currency, trading hours) — NOT price data. The fields
-      lastTraded/buyPrice/currentPrice do not exist on that endpoint.
-      T212 live prices are WebSocket-only for arbitrary tickers.
+    WHY yf.download() with prepost=True works:
+      Batches 50 tickers per request (same pattern as OHLCV history).
+      prepost=True includes pre/post market candles in the 1-minute data.
+      The most recent candle timestamped before 14:30 BST = premarket price.
+      Proven to work in daily_update.py update_premarket() job.
 
-    Returns dict: {ticker: premarket_price} — only tickers with valid prices.
+    Returns dict: {ticker: premarket_price}
     """
-    prices = {}
-    total  = len(tickers)
+    prices  = {}
+    total   = len(tickers)
+    batches = [tickers[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
 
-    print(f"  Fetching premarket prices via yfinance fast_info ({total} tickers)...")
+    print(f"  Fetching premarket prices via yf.download prepost ({total} tickers, {len(batches)} batches)...")
 
-    for i in range(0, total, PM_BATCH_SIZE):
-        batch = tickers[i:i + PM_BATCH_SIZE]
+    for i, batch in enumerate(batches):
         try:
-            # yf.Tickers() handles multiple tickers in one object
-            tkrs = yf.Tickers(" ".join(batch))
-            for t in batch:
-                try:
-                    info = tkrs.tickers[t].fast_info
-                    # pre_market_price is populated before NYSE open (09:30 ET)
-                    # Returns None outside premarket hours — we handle that below
-                    pm_price = getattr(info, "pre_market_price", None)
-                    if pm_price and float(pm_price) > 0:
-                        prices[t] = float(pm_price)
-                except Exception:
-                    continue
+            data = yf.download(
+                batch,
+                period="1d",
+                interval="1m",
+                prepost=True,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            if data.empty:
+                continue
+
+            # Get the most recent Close price from the prepost data
+            # For a single ticker yf returns a flat DataFrame
+            if len(batch) == 1:
+                t = batch[0]
+                if not data.empty and "Close" in data.columns:
+                    last_price = float(data["Close"].dropna().iloc[-1])
+                    if last_price > 0:
+                        prices[t] = last_price
+            else:
+                for t in batch:
+                    try:
+                        col = data["Close"][t] if "Close" in data.columns else None
+                        if col is None:
+                            continue
+                        col = col.dropna()
+                        if not col.empty:
+                            last_price = float(col.iloc[-1])
+                            if last_price > 0:
+                                prices[t] = last_price
+                    except Exception:
+                        continue
+
         except Exception as e:
-            print(f"  fast_info batch {i//PM_BATCH_SIZE + 1} error: {e}")
+            print(f"  Prepost batch {i+1} error: {e}")
             continue
 
-        # Small pause between batches — polite but not strictly needed for fast_info
-        if i + PM_BATCH_SIZE < total:
-            time.sleep(0.3)
+        if i > 0 and i % 5 == 0:
+            time.sleep(1)
+            print(f"  Premarket: {i+1}/{len(batches)} batches, {len(prices)} prices so far")
 
     print(f"  Premarket prices found: {len(prices)}/{total} tickers")
     return prices
-
 
 # ── OHLCV download ────────────────────────────────────────────────────────────
 
