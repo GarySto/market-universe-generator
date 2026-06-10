@@ -4,9 +4,18 @@ GarAI Momentum Scanner — universe.py
 Builds and scores the daily premarket universe.
 
 Data sources:
-  Primary:   T212 API  — live premarket prices (ISA-tradeable, no rate limits)
-  Secondary: yfinance  — OHLCV history, RVOL, trend, breakout score
-  Tertiary:  D drive   — RSI/MACD when running locally (home PC only)
+  Primary:   yfinance fast_info — live premarket prices (pre_market_price field)
+  Secondary: yfinance download  — OHLCV history, RVOL, trend, breakout score
+  Filter:    T212 API           — ISA-tradeable instrument list only (no price fetch)
+  Tertiary:  D drive            — RSI/MACD when running locally (home PC only)
+
+WHY the change from T212 price fetch:
+  T212's REST API has no public market price endpoint for arbitrary tickers.
+  /equity/metadata/instruments returns instrument metadata only (name, ISIN,
+  currency) — no price fields. Live prices only exist in /equity/positions
+  (your open positions) or via WebSocket. Neither is practical for 400+ tickers.
+  yfinance fast_info.pre_market_price is the correct solution — lightweight,
+  no separate history download, works for any ticker.
 
 Snapshot architecture:
   Every run saves output/premarket_HH.csv (e.g. premarket_08.csv)
@@ -14,41 +23,58 @@ Snapshot architecture:
   08:00 → 10:00 → 12:00 → 13:00 UTC
   Rising scores = momentum building. Fading = skip.
 
-Schedule (daily.yml): 08:00, 10:00, 12:00, 13:00 UTC Mon-Fri
+Schedule (daily.yml): 06:00, 09:00, 10:00, 11:00 UTC Mon-Fri
 """
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
-import json
+import base64
 import time
 import requests
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 os.makedirs("output", exist_ok=True)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BATCH_SIZE    = 50       # tickers per yf.download() call
+PM_BATCH_SIZE = 100      # tickers per fast_info premarket batch (no rate limit concern)
 MIN_PRICE     = 2.00     # below = too volatile / wide spreads
 MAX_PRICE     = 75.00    # above = 10% move too rare
 MIN_AVG_VOL   = 200_000  # minimum 10-day avg volume
 MIN_HISTORY   = 10       # minimum days of OHLCV needed
 
-# T212 API
+# T212 API — used for instruments list ONLY (not price fetching)
 T212_API_KEY    = os.environ.get("T212_API_KEY", "")
 T212_API_SECRET = os.environ.get("T212_API_SECRET", "")
 T212_BASE       = "https://live.trading212.com/api/v0"
 
-# RSI filter thresholds (from 1.8M signal backtest)
+# RSI filter thresholds (from 3.2M signal backtest)
 RSI_STRONG_MIN = 50
 RSI_STRONG_MAX = 70
 RSI_AVOID_MAX  = 40
 
 # D drive paths — home PC only
-D_TECH_DIR    = r"D:\GarAI\data\technicals"
+D_TECH_DIR = r"D:\GarAI\data\technicals"
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _t212_auth_header():
+    """
+    Build T212 Basic Auth header.
+    T212 requires: base64(API_KEY:API_SECRET) in Authorization header.
+    Falls back to key-only header if no secret set (older accounts).
+    """
+    if T212_API_KEY and T212_API_SECRET:
+        credentials = base64.b64encode(
+            f"{T212_API_KEY}:{T212_API_SECRET}".encode()
+        ).decode()
+        return {"Authorization": f"Basic {credentials}"}
+    elif T212_API_KEY:
+        # Legacy fallback — key alone
+        return {"Authorization": T212_API_KEY}
+    return {}
 
 
 def load_tickers():
@@ -74,31 +100,24 @@ def _normalize(series, mn, mx):
     return (series - mn) / (mx - mn) if mx != mn else series * 0.0
 
 
-# ── T212 price fetch ──────────────────────────────────────────────────────────
+# ── T212 instruments list (filter only — no price fetch) ─────────────────────
 
-def fetch_t212_prices(tickers):
+def fetch_t212_universe():
     """
-    Fetch live premarket prices from T212 API for a list of tickers.
-    Returns dict: {ticker: price} for tickers with valid prices.
+    Fetch the T212 ISA-tradeable instrument list.
+    Used to filter tickers.txt down to only ISA-tradeable stocks.
+    Returns a set of clean ticker strings, or empty set on failure.
 
-    T212 gives us live prices for ISA-tradeable instruments — no rate limits,
-    no silent None returns. Replaces the broken yfinance preMarketPrice approach.
+    NOTE: This endpoint works correctly. We use T212 for the UNIVERSE LIST
+    only — not for prices. T212's REST API has no public price endpoint for
+    arbitrary tickers (only positions you hold via /equity/positions).
     """
     if not T212_API_KEY:
-        print("  T212_API_KEY not set — skipping T212 price fetch")
-        return {}
+        print("  T212_API_KEY not set — skipping ISA universe filter")
+        return set()
 
-    # T212 beta API uses HTTP Basic Auth: key as username, secret as password
-    import base64
-    if T212_API_SECRET:
-        credentials = base64.b64encode(f"{T212_API_KEY}:{T212_API_SECRET}".encode()).decode()
-        headers = {"Authorization": f"Basic {credentials}"}
-    else:
-        # Fallback: try key alone (some T212 accounts use single key)
-        headers = {"Authorization": T212_API_KEY}
-    prices  = {}
+    headers = _t212_auth_header()
 
-    # T212 instruments endpoint gives us ticker→instrumentId mapping
     try:
         resp = requests.get(
             f"{T212_BASE}/equity/metadata/instruments",
@@ -106,54 +125,73 @@ def fetch_t212_prices(tickers):
             timeout=30
         )
         if resp.status_code != 200:
-            print(f"  T212 instruments error: {resp.status_code}")
-            return {}
+            print(f"  T212 instruments error: {resp.status_code} — skipping ISA filter")
+            return set()
         instruments = resp.json()
     except Exception as e:
         print(f"  T212 instruments exception: {e}")
-        return {}
+        return set()
 
-    # Build ticker → T212 ticker mapping
-    # T212 format is "TICKER_US_EQ" — strip suffix
-    t212_map = {}
+    tradeable = set()
     for inst in instruments:
-        raw    = inst.get("ticker", "")
+        raw = inst.get("ticker", "")
+        # T212 US equities: "AAPL_US_EQ" → "AAPL"
         ticker = raw.split("_")[0] if "_" in raw else raw
-        if ticker in set(tickers):
-            t212_map[ticker] = raw
+        if ticker:
+            tradeable.add(ticker)
 
-    print(f"  T212 matched {len(t212_map)}/{len(tickers)} tickers")
+    print(f"  T212 ISA universe: {len(tradeable)} tradeable instruments")
+    return tradeable
 
-    if not t212_map:
-        return {}
 
-    # Fetch prices in batches via T212 market data endpoint
-    # T212 /equity/history/value/{ticker} gives last price
-    matched = list(t212_map.keys())
-    fetched = 0
+# ── Premarket price fetch via yfinance ────────────────────────────────────────
 
-    for ticker in matched:
-        t212_ticker = t212_map[ticker]
+def fetch_premarket_prices(tickers):
+    """
+    Fetch live premarket prices for a list of tickers using yfinance fast_info.
+
+    WHY fast_info not yf.download():
+      yf.download() fetches full OHLCV history — expensive for a price check.
+      fast_info is a lightweight property bag that includes pre_market_price
+      when called before market open. Much faster, same rate limit profile.
+
+    WHY not T212 per-ticker endpoint:
+      T212's /equity/metadata/instruments/{ticker} returns instrument metadata
+      (name, ISIN, currency, trading hours) — NOT price data. The fields
+      lastTraded/buyPrice/currentPrice do not exist on that endpoint.
+      T212 live prices are WebSocket-only for arbitrary tickers.
+
+    Returns dict: {ticker: premarket_price} — only tickers with valid prices.
+    """
+    prices = {}
+    total  = len(tickers)
+
+    print(f"  Fetching premarket prices via yfinance fast_info ({total} tickers)...")
+
+    for i in range(0, total, PM_BATCH_SIZE):
+        batch = tickers[i:i + PM_BATCH_SIZE]
         try:
-            r = requests.get(
-                f"{T212_BASE}/equity/metadata/instruments/{t212_ticker}",
-                headers=headers,
-                timeout=10
-            )
-            if r.status_code == 200:
-                data  = r.json()
-                price = data.get("lastTraded") or data.get("buyPrice") or data.get("currentPrice")
-                if price and float(price) > 0:
-                    prices[ticker] = float(price)
-                    fetched += 1
-        except Exception:
+            # yf.Tickers() handles multiple tickers in one object
+            tkrs = yf.Tickers(" ".join(batch))
+            for t in batch:
+                try:
+                    info = tkrs.tickers[t].fast_info
+                    # pre_market_price is populated before NYSE open (09:30 ET)
+                    # Returns None outside premarket hours — we handle that below
+                    pm_price = getattr(info, "pre_market_price", None)
+                    if pm_price and float(pm_price) > 0:
+                        prices[t] = float(pm_price)
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"  fast_info batch {i//PM_BATCH_SIZE + 1} error: {e}")
             continue
 
-        # Brief pause every 100 requests
-        if fetched > 0 and fetched % 100 == 0:
-            time.sleep(0.5)
+        # Small pause between batches — polite but not strictly needed for fast_info
+        if i + PM_BATCH_SIZE < total:
+            time.sleep(0.3)
 
-    print(f"  T212 prices fetched: {fetched}")
+    print(f"  Premarket prices found: {len(prices)}/{total} tickers")
     return prices
 
 
@@ -216,8 +254,8 @@ def _load_d_drive_rsi(ticker):
     if not os.path.exists(path):
         return None
     try:
-        df     = pd.read_csv(path, index_col=0, parse_dates=True)
-        col    = [c for c in df.columns if "rsi" in c.lower()]
+        df  = pd.read_csv(path, index_col=0, parse_dates=True)
+        col = [c for c in df.columns if "rsi" in c.lower()]
         if not col:
             return None
         return round(float(df[col[0]].dropna().iloc[-1]), 1)
@@ -236,7 +274,11 @@ def _load_d_drive_macd(ticker):
         sig_cols  = [c for c in df.columns if "signal" in c.lower()]
         if not macd_cols or not sig_cols:
             return None
-        return "bullish" if float(df[macd_cols[0]].dropna().iloc[-1]) > float(df[sig_cols[0]].dropna().iloc[-1]) else "bearish"
+        return (
+            "bullish"
+            if float(df[macd_cols[0]].dropna().iloc[-1]) > float(df[sig_cols[0]].dropna().iloc[-1])
+            else "bearish"
+        )
     except Exception:
         return None
 
@@ -290,13 +332,25 @@ def build_universe(target_date=None):
     end_dt   = datetime.combine(target_date, datetime.min.time())
     start_dt = end_dt - timedelta(days=20)
 
-    # Step 1: OHLCV history via yfinance
-    print(f"Downloading OHLCV for {len(tickers)} tickers in batches of {BATCH_SIZE}...")
+    # Step 1: T212 ISA universe filter (instruments list — not prices)
+    # Filters tickers.txt down to ISA-tradeable stocks only.
+    # If T212 is unavailable, we proceed with the full tickers.txt list.
+    print(f"\nStep 1: Fetching T212 ISA universe filter...")
+    t212_universe = fetch_t212_universe()
+    if t212_universe:
+        filtered = [t for t in tickers if t in t212_universe]
+        print(f"  Filtered to {len(filtered)} ISA-tradeable tickers (from {len(tickers)})")
+        tickers = filtered
+    else:
+        print(f"  T212 filter unavailable — using all {len(tickers)} tickers")
+
+    # Step 2: OHLCV history via yfinance
+    print(f"\nStep 2: Downloading OHLCV for {len(tickers)} tickers in batches of {BATCH_SIZE}...")
     hist_data = fetch_all_history(tickers, start_dt, end_dt)
     print(f"  → History returned for {len(hist_data)} tickers")
 
-    # Step 2: Apply price/volume filters
-    eligible     = []
+    # Step 3: Apply price/volume filters
+    eligible      = []
     ohlcv_records = {}
 
     for t, hist in hist_data.items():
@@ -309,17 +363,17 @@ def build_universe(target_date=None):
             if yesterday_close < MIN_PRICE or yesterday_close > MAX_PRICE:
                 continue
 
-            last_10       = hist.tail(10)
+            last_10        = hist.tail(10)
             avg_volume_10d = float(last_10["Volume"].mean())
 
             if avg_volume_10d < MIN_AVG_VOL:
                 continue
 
-            high_10d       = float(last_10["High"].max())
-            low_10d        = float(last_10["Low"].min())
-            atr_10d        = float((last_10["High"] - last_10["Low"]).mean())
-            trend_5d       = int((hist["Close"].diff() > 0).tail(5).sum())
-            breakout_score = (
+            high_10d         = float(last_10["High"].max())
+            low_10d          = float(last_10["Low"].min())
+            atr_10d          = float((last_10["High"] - last_10["Low"]).mean())
+            trend_5d         = int((hist["Close"].diff() > 0).tail(5).sum())
+            breakout_score   = (
                 (yesterday_close - low_10d) / (high_10d - low_10d)
                 if high_10d != low_10d else 0.0
             )
@@ -340,18 +394,20 @@ def build_universe(target_date=None):
 
     print(f"  → {len(eligible)} tickers passed price/volume filters")
 
-    # Step 3: Premarket prices via T212 API (primary)
-    print(f"Fetching premarket prices via T212 API for {len(eligible)} tickers...")
-    t212_prices = fetch_t212_prices(eligible)
+    # Step 4: Premarket prices via yfinance fast_info
+    # This replaces the broken T212 per-ticker price loop.
+    # T212 REST API has no public price endpoint for arbitrary tickers.
+    print(f"\nStep 4: Fetching premarket prices via yfinance fast_info...")
+    pm_prices = fetch_premarket_prices(eligible)
 
-    # Step 4: D drive RSI/MACD (local only)
+    # Step 5: D drive RSI/MACD (local only)
     d_drive_available = os.path.exists(D_TECH_DIR)
     if d_drive_available:
-        print("D drive technicals available — loading RSI/MACD...")
+        print("\nStep 5: D drive technicals available — loading RSI/MACD...")
     else:
-        print("D drive not available (GitHub Actions) — RSI/MACD will be None")
+        print("\nStep 5: D drive not available (GitHub Actions) — RSI/MACD will be None")
 
-    # Step 5: Build records
+    # Step 6: Build records
     records = []
     for t in eligible:
         try:
@@ -360,15 +416,15 @@ def build_universe(target_date=None):
             yv   = base["yesterday_volume"]
             av   = base["avg_volume_10d"]
 
-            # Use T212 price if available, else fall back to yesterday's close
-            pm_price  = t212_prices.get(t, None)
-            has_gap   = pm_price is not None and pm_price > 0
+            # Use yfinance premarket price if available, else fall back to yesterday close
+            pm_price = pm_prices.get(t, None)
+            has_gap  = pm_price is not None and pm_price > 0
             if not has_gap:
                 pm_price = yc
 
             gap_pct        = (pm_price - yc) / yc if has_gap else 0.0
             rvol           = yv / av if av else 0.0
-            premarket_rvol = 0.0  # T212 doesn't give premarket volume directly
+            premarket_rvol = 0.0  # volume not available premarket
 
             rsi_val  = _load_d_drive_rsi(t)  if d_drive_available else None
             macd_sig = _load_d_drive_macd(t) if d_drive_available else None
@@ -387,7 +443,7 @@ def build_universe(target_date=None):
                 "volatility_score": float(base["volatility_score"]),
                 "rsi":              rsi_val,
                 "macd_signal":      macd_sig,
-                "price_source":     "t212" if has_gap else "prev_close",
+                "price_source":     "yf_premarket" if has_gap else "prev_close",
             })
         except Exception:
             continue
@@ -397,36 +453,36 @@ def build_universe(target_date=None):
 
     df = pd.DataFrame(records)
 
-    # Step 6: Normalise
-    gap_min,   gap_max   = _safe_min_max(df["gap_pct"])
-    rvol_min,  rvol_max  = _safe_min_max(df["rvol"])
-    brk_min,   brk_max   = _safe_min_max(df["breakout_score"])
-    vol_min,   vol_max   = _safe_min_max(df["volatility_score"])
+    # Step 7: Normalise
+    gap_min,  gap_max  = _safe_min_max(df["gap_pct"])
+    rvol_min, rvol_max = _safe_min_max(df["rvol"])
+    brk_min,  brk_max  = _safe_min_max(df["breakout_score"])
+    vol_min,  vol_max  = _safe_min_max(df["volatility_score"])
 
-    df["norm_gap"]        = _normalize(df["gap_pct"],        gap_min,  gap_max)
-    df["norm_rvol"]       = _normalize(df["rvol"],           rvol_min, rvol_max)
+    df["norm_gap"]        = _normalize(df["gap_pct"],          gap_min,  gap_max)
+    df["norm_rvol"]       = _normalize(df["rvol"],             rvol_min, rvol_max)
     df["norm_pre_rvol"]   = df["norm_rvol"]
-    df["norm_breakout"]   = _normalize(df["breakout_score"], brk_min,  brk_max)
-    df["norm_volatility"] = _normalize(df["volatility_score"], vol_min, vol_max)
+    df["norm_breakout"]   = _normalize(df["breakout_score"],   brk_min,  brk_max)
+    df["norm_volatility"] = _normalize(df["volatility_score"], vol_min,  vol_max)
     df["norm_trend"]      = df["trend_5d"] / 5.0
 
     pm_raw = df["norm_gap"].clip(lower=0) + df["norm_rvol"].clip(lower=0)
     pm_min, pm_max = _safe_min_max(pm_raw)
     df["premarket_momentum"] = _normalize(pm_raw, pm_min, pm_max)
 
-    # Step 7: RSI factor
+    # Step 8: RSI factor
     def rsi_factor(rsi):
-        if rsi is None:      return 0.5
-        if rsi < RSI_AVOID_MAX:  return 0.0
-        elif rsi <= RSI_STRONG_MIN: return 0.3
-        elif rsi <= RSI_STRONG_MAX: return 1.0
-        elif rsi <= 80:      return 0.6
-        else:                return 0.2
+        if rsi is None:              return 0.5
+        if rsi < RSI_AVOID_MAX:      return 0.0
+        elif rsi <= RSI_STRONG_MIN:  return 0.3
+        elif rsi <= RSI_STRONG_MAX:  return 1.0
+        elif rsi <= 80:              return 0.6
+        else:                        return 0.2
 
     df["rsi_factor"]  = df["rsi"].apply(rsi_factor)
     df["macd_factor"] = df["macd_signal"].map({"bullish": 1.0, "bearish": 0.0}).fillna(0.5)
 
-    # Step 8: Score
+    # Step 9: Score
     base_score = (
         5.0 * df["premarket_momentum"] +
         3.0 * df["norm_gap"] +
@@ -450,16 +506,16 @@ def build_universe(target_date=None):
 
     # RSI label for dashboard
     def rsi_label(rsi):
-        if rsi is None:         return "—"
-        if rsi < 30:            return "oversold"
-        elif rsi < RSI_AVOID_MAX:   return "weak"
-        elif rsi <= RSI_STRONG_MIN: return "neutral"
-        elif rsi <= RSI_STRONG_MAX: return "strong ✓"
-        else:                   return "overbought"
+        if rsi is None:              return "—"
+        if rsi < 30:                 return "oversold"
+        elif rsi < RSI_AVOID_MAX:    return "weak"
+        elif rsi <= RSI_STRONG_MIN:  return "neutral"
+        elif rsi <= RSI_STRONG_MAX:  return "strong ✓"
+        else:                        return "overbought"
 
     df["rsi_label"] = df["rsi"].apply(rsi_label)
 
-    # Step 9: Score trend vs previous snapshot
+    # Step 10: Score trend vs previous snapshot
     prev_scores = load_previous_snapshot(utc_hour)
     if prev_scores is not None:
         df["score_prev"]  = df["ticker"].map(prev_scores)
@@ -476,7 +532,7 @@ def build_universe(target_date=None):
     df["scan_time_utc"] = datetime.utcnow().strftime("%H:%M:%S")
     df = df.sort_values("score", ascending=False).reset_index(drop=True)
 
-    # Step 10: Save snapshot
+    # Step 11: Save snapshot
     save_snapshot(df, utc_hour)
 
     return df
@@ -488,14 +544,15 @@ if __name__ == "__main__":
         df.to_csv("output/universe.csv", index=False)
         print(f"\nUniverse written — {len(df)} tickers scored")
 
-        # Show top candidates with T212 prices
-        t212_count = (df["price_source"] == "t212").sum()
-        print(f"Tickers with live T212 price: {t212_count}")
+        pm_count = (df["price_source"] == "yf_premarket").sum()
+        pc_count = (df["price_source"] == "prev_close").sum()
+        print(f"Tickers with live premarket price : {pm_count}")
+        print(f"Tickers using prev_close fallback : {pc_count}")
 
         top = df[df["score"] > 7].head(10)
         if not top.empty:
             print("\nTop candidates (score > 7):")
-            cols = ["ticker","score","gap_pct","rvol","breakout_score","trend_dir","price_source"]
+            cols = ["ticker", "score", "gap_pct", "rvol", "breakout_score", "trend_dir", "price_source"]
             print(top[cols].to_string(index=False))
         else:
             print("\nNo tickers above score 7 today")
