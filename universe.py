@@ -429,55 +429,10 @@ def build_universe(target_date=None):
     else:
         print("\nStep 5: D drive not available (GitHub Actions) — RSI/MACD will be None")
 
-    # Step 6: Build records
-    records = []
-    for t in eligible:
-        try:
-            base = ohlcv_records[t]
-            yc   = base["yesterday_close"]
-            yv   = base["yesterday_volume"]
-            av   = base["avg_volume_10d"]
-
-            # Use yfinance premarket price if available, else fall back to yesterday close
-            pm_price = pm_prices.get(t, None)
-            has_gap  = pm_price is not None and pm_price > 0
-            if not has_gap:
-                pm_price = yc
-
-            gap_pct        = (pm_price - yc) / yc if has_gap else 0.0
-            rvol           = yv / av if av else 0.0
-            premarket_rvol = 0.0  # volume not available premarket
-
-            rsi_val  = _load_d_drive_rsi(t)  if d_drive_available else None
-            macd_sig = _load_d_drive_macd(t) if d_drive_available else None
-
-            records.append({
-                "ticker":           t,
-                "premarket_price":  round(pm_price, 4),
-                "yesterday_close":  round(yc, 4),
-                "gap_pct":          float(gap_pct),
-                "rvol":             float(rvol),
-                "premarket_rvol":   float(premarket_rvol),
-                "avg_volume_10d":   int(av),
-                "trend_5d":         int(base["trend_5d"]),
-                "breakout_score":   float(base["breakout_score"]),
-                "atr_10d":          float(base["atr_10d"]),
-                "volatility_score": float(base["volatility_score"]),
-                "rsi":              rsi_val,
-                "macd_signal":      macd_sig,
-                "price_source":     "yf_premarket" if has_gap else "prev_close",
-            })
-        except Exception:
-            continue
-
-    if not records:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(records)
-
     # Step 7: Calculate RSI from OHLCV history (no D drive needed)
     # This is the #1 predictor from the 3.2M signal backtest.
     # RSI 90+: 61% WR. RSI <40: 38.7% WR — hard block.
+    records = []
     def calc_rsi(hist, period=14):
         try:
             closes = hist["Close"].tail(30)
