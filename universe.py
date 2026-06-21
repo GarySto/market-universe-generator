@@ -352,7 +352,7 @@ def build_universe(target_date=None):
 
     utc_hour = datetime.utcnow().hour
     end_dt   = datetime.combine(target_date, datetime.min.time())
-    start_dt = end_dt - timedelta(days=20)
+    start_dt = end_dt - timedelta(days=40)
 
     # Step 1: T212 ISA universe filter (instruments list — not prices)
     # Filters tickers.txt down to ISA-tradeable stocks only.
@@ -503,7 +503,7 @@ def build_universe(target_date=None):
     # Score range: 0–10
 
     def rsi_score(rsi):
-        if rsi is None:      return 3.0   # neutral when unknown
+        if rsi is None or pd.isna(rsi):  return 3.0   # neutral when unknown
         if rsi >= 90:        return 5.0   # 61% WR — strongest signal
         elif rsi >= 80:      return 4.0   # 57.4% WR
         elif rsi >= 70:      return 3.0   # 52.3% WR
@@ -511,7 +511,7 @@ def build_universe(target_date=None):
         else:                return 0.5   # weak but not blocked (block is <40)
 
     def rsi_label(rsi):
-        if rsi is None:  return "—"
+        if rsi is None or pd.isna(rsi):  return "—"
         if rsi >= 90:    return "🔥 90+"
         elif rsi >= 80:  return "strong ✓"
         elif rsi >= 70:  return "good"
