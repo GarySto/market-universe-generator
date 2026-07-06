@@ -538,7 +538,7 @@ with tab1:
                 y=alt.Y("rvol:Q", title="RVOL (volume vs 10-day average)"),
                 color=alt.Color("score:Q", scale=alt.Scale(scheme="redyellowgreen"),
                                 legend=alt.Legend(title="Score")),
-                tooltip=["ticker", "score", "gap_pct", "rvol", "premarket_rvol", "trend_5d", "breakout_score"],
+                tooltip=["ticker", "score", "gap_pct", "rvol", "trend_5d", "breakout_score"],
             )
             .interactive()
         )
