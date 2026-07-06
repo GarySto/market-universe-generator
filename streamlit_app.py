@@ -662,6 +662,7 @@ with tab2:
         )
         display_cols = ["ticker", "score", "gap_pct", "premarket_rvol",
                         "rvol", "trend_5d", "breakout_score", "volatility_score"]
+        display_cols = [c for c in display_cols if c in today_top.columns]
         st.dataframe(today_top[display_cols], use_container_width=True)
         st.error(
             "🕐 **Entry window: 13:30–14:15 BST** · "
