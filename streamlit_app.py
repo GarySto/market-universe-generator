@@ -640,6 +640,15 @@ with tab2:
 
     has_gap_data = bool((df["gap_pct"].abs() > 0.001).any())
 
+    # 26 Jul 2026 FIX: today_top was only defined inside the has_gap_data
+    # branch, so on any day with no real premarket gap data (has_gap_data
+    # False), the variable never existed — and the .empty check below
+    # crashed with NameError since Streamlit runs the whole script every
+    # time regardless of which branches executed. Initialising it to an
+    # empty DataFrame first guarantees it always exists, so the .empty
+    # check below is always safe and just falls through to the "no
+    # tickers today" message when there's genuinely nothing to show.
+    today_top = pd.DataFrame()
     if has_gap_data:
         # Threshold is 7 (not 10) — scores are now normalised to a 0–12.5 scale
         # where the theoretical max is 5+3+2+1+1+0.5 = 12.5. A score of 7 means
