@@ -1,0 +1,19 @@
+=== Step 1: Instruments list structure ===
+Status: 401
+
+=== Step 2: Available API endpoints ===
+https://live.trading212.com/api/v0/equity/portfolio: 401
+https://live.trading212.com/api/v0/equity/orders: 401
+https://live.trading212.com/api/v0/equity/metadata/exchanges: 401
+
+=== Step 3: Price endpoint patterns ===
+
+https://live.trading212.com/api/v0/equity/metadata/instruments/AAPL_US_EQ
+Status: 404
+Error: 404 page not found
+
+
+https://live.trading212.com/api/v0/equity/portfolio/AAPL_US_EQ
+Status: 401
+Error: 
+

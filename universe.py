@@ -78,12 +78,43 @@ def build_universe(target_date=None):
             rsi_val = calc_rsi(hist["Close"])
 
             # ---------- 4. Premarket data ----------
+            # 31 Jul 2026 — KNOWN LIMITATION, deliberately left in place for now.
+            #
+            # `preMarketPrice` is not a fast_info field at all (it lives on
+            # .info, where yfinance returns None for it silently anyway). So
+            # this has ALWAYS fallen through to yesterday_close, which makes
+            # gap_pct exactly 0.0 for every ticker, every day — which is
+            # exactly what the dashboard shows. The Game is a premarket gap
+            # strategy that has never once measured a gap.
+            #
+            # Fixing the SOURCE properly means a second yfinance call per
+            # ticker with prepost=True, across ~1,100 tickers, which risks
+            # blowing the Actions job time limit. That's a scoped piece of
+            # work for its own session (two-pass: score without gap, then
+            # fetch real premarket bars for the top ~100 only).
+            #
+            # What IS fixed today: premarket_price and prev_close are now
+            # WRITTEN to universe.csv. place_demo_orders_game.py reads
+            # premarket_price to size its trade and crashed with a KeyError
+            # every time it found a candidate, because the column did not
+            # exist. The Game can now actually place an order. The gap
+            # signal being flat is a separate, tracked problem.
             info = ticker.fast_info
-            premarket_price = info.get("preMarketPrice", yesterday_close)
-            if premarket_price is None:
-                premarket_price = yesterday_close
+            try:
+                premarket_price = info.get("preMarketPrice", None)
+            except Exception:
+                premarket_price = None
 
-            premarket_volume = info.get("preMarketVolume", 0) or 0
+            if premarket_price is None or premarket_price != premarket_price:
+                premarket_price = yesterday_close
+                premarket_source = "prev_close_fallback"
+            else:
+                premarket_source = "live"
+
+            try:
+                premarket_volume = info.get("preMarketVolume", 0) or 0
+            except Exception:
+                premarket_volume = 0
 
             # ---------- 5. Feature engineering ----------
             gap_pct = (premarket_price - yesterday_close) / yesterday_close
@@ -128,6 +159,11 @@ def build_universe(target_date=None):
             records.append({
                 "ticker": t,
                 "score": score,
+                # premarket_price / prev_close — REQUIRED by
+                # place_demo_orders_game.py to size a trade. Do not remove.
+                "premarket_price": round(float(premarket_price), 4),
+                "prev_close": round(float(yesterday_close), 4),
+                "premarket_source": premarket_source,
                 "rsi": round(rsi_val, 1) if rsi_val is not None else None,
                 "gap_pct": gap_pct,
                 "rvol": rvol,
