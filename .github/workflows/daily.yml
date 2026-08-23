@@ -1,5 +1,10 @@
 name: Daily Universe Build
 
+# 23 Aug 2026 — alert credentials switched from Outlook (basic auth blocked,
+# alerts silently dead) to Gmail. GMAIL_USER + GMAIL_APP_PASSWORD secrets must
+# exist in THIS repo too (secrets are per-repo). send_alert.py needs its env
+# names updated to match — see PATCH_GUIDE.md step 6.
+
 on:
   schedule:
     - cron: "0 6 * * 1-5"    # 06:00 UTC = 07:00 BST — early pulse
@@ -33,9 +38,9 @@ jobs:
       - name: Send alert email (if strong candidates found)
         continue-on-error: true
         env:
-          OUTLOOK_USER:     ${{ secrets.OUTLOOK_USER }}
-          OUTLOOK_PASSWORD: ${{ secrets.OUTLOOK_PASSWORD }}
-          ALERT_EMAILS:     ${{ secrets.ALERT_EMAILS }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAILS:       ${{ secrets.ALERT_EMAILS }}
         run: python send_alert.py
 
       - name: Commit results
