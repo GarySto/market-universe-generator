@@ -6,6 +6,39 @@ premarket momentum. Consumed by The Game (via premarket_connector.py in
 the private trading repo) and by the public Streamlit dashboard.
 
 =============================================================
+6 SEP 2026 — REAL PREMARKET GAP, TWO-PASS FETCH
+=============================================================
+
+Root cause (diagnosed 9 Aug, fixed today): `ticker.fast_info` does not
+actually carry a `preMarketPrice` field — it silently returns None, so
+premarket_price has ALWAYS fallen back to yesterday_close, making
+gap_pct exactly 0.0 for every ticker, every day. The Game is a
+premarket-gap strategy that had never once measured a real gap.
+
+Fix: after the pass-1 loop below scores the whole universe with no gap
+component (unchanged), the TOP_N_FOR_GAP_FETCH highest-scoring tickers
+each get ONE extra yfinance call: `ticker.history(period="1d",
+interval="1m", prepost=True)`, which actually contains premarket bars.
+The last available bar's close vs. yesterday's close is a real gap_pct.
+Those rows are then rescored with the gap component included and
+UNSCALED (gap_available=True, score_scale=1.0) — the achievable max
+for them is genuinely 10.0 now, no rescue needed. Rows outside the top
+N never get a real gap and keep the honest rescaled score exactly as
+before (gap_available=False).
+
+Why top-N and not the whole universe: fetching 1-minute prepost bars
+for every ticker in the universe risked blowing the GitHub Actions job
+time limit. Scoping to the top ~100 by no-gap score keeps the extra
+cost to roughly 100 additional calls per run.
+
+Expected effect: SCORE_THRESHOLD (7.0, set in place_demo_orders_game.py)
+now means something real. Previously a "perfect" no-gap score (RSI 100,
+rvol 4.0+, breakout 1.0) rescaled to exactly 10.0 and cleared 7.0 with
+zero actual gap. Now clearing 7.0 requires a real, meaningful gap on
+top of the other components — expect The Game to qualify a candidate
+LESS often than before. That is the fix working, not a regression.
+
+=============================================================
 9 AUG 2026 — TWO CHANGES, BOTH ABOUT TRADEABILITY
 =============================================================
 
@@ -26,34 +59,15 @@ the private trading repo) and by the public Streamlit dashboard.
     instead of the main file, so they can never reach a downstream consumer,
     but you can still see what was filtered and why.
 
-(2) THE SCORE IS NOW NORMALISED WHEN THE GAP COMPONENT IS UNAVAILABLE.
+(2) THE SCORE IS NORMALISED WHEN THE GAP COMPONENT IS UNAVAILABLE.
 
-    gap_pct has been exactly 0.0 for every ticker, every day, since this
-    file was written — see the premarket note below. That meant gap_score
-    was permanently 0, and the highest score the formula could physically
-    produce was 7.0 (4 RSI + 0 gap + 2 rvol + 1 breakout).
-
-    The Game's SCORE_THRESHOLD was also 7.0. The threshold equalled the
-    ceiling. The only tickers that could ever qualify were literal perfect
-    sevens, requiring RSI of exactly 100, rvol of 4.0+, AND a breakout_score
-    of exactly 1.0, simultaneously. On the live dashboard you can see this:
-    PRKA and ACAN scored exactly 7.0; BMBN scored 6.954 and was excluded
-    purely because its rvol was 3.908 instead of 4.0.
-
-    RSI of exactly 100 means zero down-closes in 14 sessions. On a liquid
-    stock that essentially never happens. On thin sub-penny names it happens
-    constantly — which is precisely why the only two candidates this system
-    ever produced were untradeable junk.
-
-    So: when the gap component is unavailable, the remaining components are
-    rescaled so the achievable maximum is still 10.0 and a "7.0+" threshold
-    keeps meaning "70% of the best score available today". Both numbers are
-    written — score_raw (unscaled, comparable to history) and score
+    For any ticker outside today's top N (see 6 Sep note above), gap_pct
+    is still not measured, so gap_score is 0 and the achievable max for
+    that row is 7.0 rather than 10.0. The remaining components are
+    rescaled so a "7.0+" threshold on those rows still means "70% of
+    what's achievable for them" rather than "a literally perfect score".
+    Both numbers are written — score_raw (unscaled) and score
     (normalised, what everything downstream should use).
-
-    Restore the gap component properly (two-pass premarket fetch) and
-    GAP_AVAILABLE flips to True, the rescale switches itself off, and the
-    7.0 threshold reverts to its original meaning with no other changes.
 """
 
 import yfinance as yf
@@ -72,9 +86,17 @@ MIN_AVG_DOLLAR_VOL  = 1_000_000   # 10-day average daily traded value, USD.
                                   # Sub-penny and shell names fail this instantly.
 
 # ── Premarket gap availability ──────────────────────────────────────────────
-# Set to True ONLY once a real premarket price source is wired in. While it
-# is False, gap_score is known-zero and the score is rescaled to compensate.
+# This now reflects the PASS-1 (no-gap) base calculation only. Rows in
+# today's top N get a real gap fetched in pass 2 and their own
+# per-row gap_available is overridden to True there — see build_universe().
+# Leave this False: it governs the rescale for every row NOT in the
+# top N, which never gets a real gap fetch and must stay honestly scaled.
 GAP_AVAILABLE = False
+
+# ── Two-pass real premarket gap (6 Sep 2026) ────────────────────────────────
+TOP_N_FOR_GAP_FETCH = 100   # how many top-scoring (no-gap) tickers get a
+                            # real premarket fetch in pass 2. Scoped to
+                            # keep the extra yfinance calls bounded.
 
 # Component ceilings — kept as named constants so the rescale below can be
 # derived from them rather than hardcoded.
@@ -105,6 +127,32 @@ def calc_rsi(closes, period=14):
     rsi_series = 100 - (100 / (1 + rs))
     val = rsi_series.iloc[-1]
     return float(val) if pd.notna(val) else None
+
+
+def fetch_real_premarket(ticker_symbol, prev_close):
+    """
+    PASS 2 ONLY — called for the top TOP_N_FOR_GAP_FETCH candidates by
+    no-gap score. `fast_info` does not carry a real preMarketPrice field
+    (see module docstring); `ticker.history(prepost=True)` does return
+    actual extended-hours minute bars. Returns (premarket_price, source).
+
+    Falls back to (prev_close, "prev_close_fallback") on any failure or
+    empty result — same graceful degradation as pass 1, so a single bad
+    fetch just means that one ticker keeps its rescaled no-gap score
+    instead of crashing the whole run.
+    """
+    try:
+        pm = yf.Ticker(ticker_symbol).history(
+            period="1d", interval="1m", prepost=True
+        )
+        if pm.empty:
+            return prev_close, "prev_close_fallback"
+        last_price = float(pm["Close"].iloc[-1])
+        if not np.isfinite(last_price) or last_price <= 0:
+            return prev_close, "prev_close_fallback"
+        return last_price, "live_premarket_1m"
+    except Exception:
+        return prev_close, "prev_close_fallback"
 
 
 # ---------------------------------------------------------
@@ -175,39 +223,14 @@ def build_universe(target_date=None):
             # swing.
             rsi_val = calc_rsi(hist["Close"])
 
-            # ---------- 4. Premarket data ----------
-            # KNOWN LIMITATION, still open as of 9 Aug 2026.
-            #
-            # `preMarketPrice` is not a fast_info field at all (it lives on
-            # .info, where yfinance returns None for it silently anyway). So
-            # this has ALWAYS fallen through to yesterday_close, which makes
-            # gap_pct exactly 0.0 for every ticker, every day. The Game is a
-            # premarket gap strategy that has never once measured a gap.
-            #
-            # Fixing the SOURCE properly means a second yfinance call per
-            # ticker with prepost=True, which risks blowing the Actions job
-            # time limit across the full universe. The scoped fix is a
-            # two-pass approach: score the whole universe without gap, then
-            # fetch real premarket bars for the top ~100 only.
-            #
-            # Until that lands, GAP_AVAILABLE stays False and the score
-            # rescale below compensates so thresholds stay meaningful.
-            info = ticker.fast_info
-            try:
-                premarket_price = info.get("preMarketPrice", None)
-            except Exception:
-                premarket_price = None
-
-            if premarket_price is None or premarket_price != premarket_price:
-                premarket_price = yesterday_close
-                premarket_source = "prev_close_fallback"
-            else:
-                premarket_source = "live"
-
-            try:
-                premarket_volume = info.get("preMarketVolume", 0) or 0
-            except Exception:
-                premarket_volume = 0
+            # ---------- 4. Premarket data — PASS 1 (no real gap yet) -------
+            # See module docstring, 6 Sep 2026 note. Pass 1 always uses the
+            # yesterday_close fallback; pass 2 below (after this loop)
+            # overwrites premarket_price/gap_pct for the top N tickers only
+            # with a real fetch via fetch_real_premarket().
+            premarket_price = yesterday_close
+            premarket_source = "prev_close_fallback"
+            premarket_volume = 0
 
             # ---------- 5. Feature engineering ----------
             gap_pct = (premarket_price - yesterday_close) / yesterday_close
@@ -236,10 +259,12 @@ def build_universe(target_date=None):
             score_raw = rsi_score + gap_score + rvol_score + breakout_component
 
             # ── Normalisation (9 Aug 2026) ──
-            # With GAP_AVAILABLE False, gap_score is structurally 0, so the
-            # achievable maximum is 7.0 rather than 10.0. Rescale so that a
-            # 7.0 threshold still means "70% of what's achievable" instead of
-            # "a literally perfect score".
+            # With GAP_AVAILABLE False, gap_score is structurally 0 here in
+            # pass 1, so the achievable maximum is 7.0 rather than 10.0.
+            # Rescale so that a 7.0 threshold still means "70% of what's
+            # achievable" instead of "a literally perfect score". Pass 2
+            # below overwrites this for the top N tickers once a real gap
+            # is fetched.
             if GAP_AVAILABLE:
                 score = score_raw
                 score_scale = 1.0
@@ -270,6 +295,12 @@ def build_universe(target_date=None):
                 "trend_5d": trend_5d,
                 "breakout_score": breakout_score,
                 "volatility_score": volatility_score,
+                # Intermediate scaled components (6 Sep 2026) — kept so pass
+                # 2 can rebuild score_raw exactly without recomputing from
+                # already-rounded display values.
+                "_rsi_score": rsi_score,
+                "_rvol_score": rvol_score,
+                "_breakout_component": breakout_component,
             })
 
         except Exception as e:
@@ -279,6 +310,45 @@ def build_universe(target_date=None):
     df = pd.DataFrame(records)
     if not df.empty:
         df = df.sort_values("score", ascending=False)
+
+    # ---------------------------------------------------------
+    # PASS 2 (6 Sep 2026): real premarket gap for the top candidates
+    # ---------------------------------------------------------
+    if not df.empty:
+        top_slice = df.head(TOP_N_FOR_GAP_FETCH)
+        print(f"Pass 2: fetching real premarket data for top "
+              f"{len(top_slice)} candidate(s) by no-gap score...")
+
+        for idx in top_slice.index:
+            row = df.loc[idx]
+            real_pm_price, pm_source = fetch_real_premarket(
+                row["ticker"], row["prev_close"]
+            )
+            real_gap_pct = (real_pm_price - row["prev_close"]) / row["prev_close"]
+
+            gap_score = min(abs(real_gap_pct) * 100 * 0.3, GAP_MAX)
+            # Real gap now available for this row -> full 10.0 scale used
+            # directly, no rescale needed.
+            new_score_raw = (row["_rsi_score"] + gap_score
+                              + row["_rvol_score"] + row["_breakout_component"])
+            new_score = new_score_raw
+            new_score_scale = 1.0
+
+            df.loc[idx, "premarket_price"] = round(float(real_pm_price), 4)
+            df.loc[idx, "premarket_source"] = pm_source
+            df.loc[idx, "gap_pct"] = real_gap_pct
+            df.loc[idx, "score_raw"] = round(new_score_raw, 4)
+            df.loc[idx, "score"] = round(new_score, 4)
+            df.loc[idx, "score_scale"] = round(new_score_scale, 4)
+            df.loc[idx, "gap_available"] = True
+
+        # Real gaps can reorder the top slice relative to itself (though
+        # never bring in a row from outside it — that row never got a
+        # fetch, see TOP_N_FOR_GAP_FETCH note above).
+        df = df.sort_values("score", ascending=False)
+
+        # Internal helper columns — not part of the public output contract.
+        df = df.drop(columns=["_rsi_score", "_rvol_score", "_breakout_component"])
 
     excluded_df = pd.DataFrame(excluded)
     return df, excluded_df
@@ -300,6 +370,7 @@ if __name__ == "__main__":
               f"${MIN_AVG_DOLLAR_VOL:,.0f}) — see output/universe_excluded.csv")
 
     if not df.empty:
+        n_real_gap = int(df["gap_available"].sum()) if "gap_available" in df else 0
         print(f"Top score today: {df['score'].max():.2f} "
               f"(raw {df['score_raw'].max():.2f}, "
-              f"gap component {'ON' if GAP_AVAILABLE else 'OFF — score rescaled'})")
+              f"{n_real_gap} ticker(s) with a real premarket gap fetched)")
